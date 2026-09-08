@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/chalkline/pg_hba.conf
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - chalkline_postgres:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+      - ./postgres:/etc/chalkline:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - chalkline_internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD}"
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - chalkline_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - chalkline_internal
+
+networks:
+  chalkline_internal:
+    driver: bridge
+
+volumes:
+  chalkline_postgres:
+  chalkline_redis:

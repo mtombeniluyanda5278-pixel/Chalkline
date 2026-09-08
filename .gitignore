@@ -1,8 +1,8 @@
+.env
+.env.example
+.env.test
+package.json
+package-lock.json
 node_modules/
 dist/
-.env
-*.log
-coverage/
-mail/dev-outbox.txt
-.DS_Store
-.env
+*.zip
