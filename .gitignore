@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+coverage/
+mail/dev-outbox.txt
+.DS_Store
+.env
