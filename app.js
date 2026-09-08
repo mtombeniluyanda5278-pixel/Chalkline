@@ -975,14 +975,20 @@ async function renderRegister() {
     addressRegion: field({ id: "reg-address-region", label: "State / region (optional)", autocomplete: "address-level1" }),
     addressPostalCode: field({ id: "reg-address-postal", label: "Postal code", required: true, autocomplete: "postal-code" }),
     addressCountry: field({ id: "reg-address-country", label: "Country", tag: "select", required: true }),
+        marketingAnnouncements: field({
+      id: "reg-marketing-announcements",
+      label: "Send me product announcements",
+      checkbox: true,
+    }),
+    marketingApps: field({
+      id: "reg-marketing-apps",
+      label: "Send me updates about new features",
+      checkbox: true,
+    }),
   };
 
   populateCountrySelect(fields.country.input);
   populateCountrySelect(fields.addressCountry.input);
-
-  marketingAnnouncements.input.type = "checkbox";
-
-  marketingApps.input.type = "checkbox";
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
@@ -1004,8 +1010,8 @@ async function renderRegister() {
       el("div", { class: "form-row" }, [fields.addressCity.wrapper, fields.addressRegion.wrapper]),
       el("div", { class: "form-row" }, [fields.addressPostalCode.wrapper, fields.addressCountry.wrapper]),
     ]),
-    marketingAnnouncements.wrapper,
-    marketingApps.wrapper,
+     fields.marketingAnnouncements.wrapper,
+    fields.marketingApps.wrapper,
     submitBtn,
   ]);
 
