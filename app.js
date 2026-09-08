@@ -978,11 +978,13 @@ async function renderRegister() {
         marketingAnnouncements: field({
       id: "reg-marketing-announcements",
       label: "Send me product announcements",
+      type: "checkbox",
       checkbox: true,
     }),
-    marketingApps: field({
+        marketingApps: field({
       id: "reg-marketing-apps",
       label: "Send me updates about new features",
+      type: "checkbox",
       checkbox: true,
     }),
   };
