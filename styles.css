@@ -1236,3 +1236,31 @@ select:focus-visible {
 .chalk-confetti {animation:chalk-arrive 800ms ease-out;}
 @keyframes chalk-arrive {from {opacity:0;transform:translateY(6px);} to {opacity:1;transform:none;}}
 @media(prefers-reduced-motion:reduce){.chalk-confetti{animation:none;}}
+
+/* Signed-in launcher: content first, account controls live under Account. */
+.workspace-home { display: grid; gap: 2.6rem; padding-block: 1.5rem 3rem; }
+.workspace-home h1 { font-size: clamp(2rem, 5vw, 3.4rem); margin: .5rem 0 .7rem; }
+.workspace-home h2 { font-size: 1.25rem; margin: 0 0 1rem; }
+.workspace-home h3 { font-size: 1.7rem; margin: .5rem 0; overflow-wrap: anywhere; }
+.workspace-home__greeting p, .workspace-home small { color: var(--color-ink-soft); }
+.workspace-home__continue { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; border-block: 1px solid var(--color-surface-border); padding-block: 1.6rem; }
+.workspace-home__section-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .6rem; }
+.workspace-home__section-head nav { display: flex; flex-wrap: wrap; gap: .4rem; }
+.workspace-home__templates { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: .6rem; }
+.workspace-home__template { flex: 0 0 min(16rem, 75vw); display: grid; gap: 1rem; padding: 1.3rem; border: 1px solid var(--color-surface-border); border-radius: 18px; color: var(--color-ink); text-decoration: none; overflow-wrap: anywhere; }
+.workspace-home__recent { list-style: none; margin: 0; padding: 0; }
+.workspace-home__recent a { display: flex; justify-content: space-between; gap: 1rem; padding: 1rem .2rem; border-bottom: 1px solid var(--color-surface-border); color: var(--color-ink); text-decoration: none; min-height: 44px; overflow-wrap: anywhere; }
+.workspace-home__recent small { flex-shrink: 0; }
+.account-section { display: grid; gap: 1rem; margin-block: 2.5rem; scroll-margin-top: 2rem; }
+.account-section > h2 { font-size: 1.7rem; margin-bottom: .3rem; }
+.account-panel { border-bottom: 1px solid var(--color-surface-border); padding-bottom: .75rem; }
+.account-panel > summary { cursor: pointer; padding: .8rem .2rem; min-height: 44px; font-weight: 600; }
+.account-panel > .card { margin-top: .7rem; }
+.account-sections { display: flex; flex-wrap: wrap; gap: 1.2rem; }
+.account-sections a { padding-block: .7rem; }
+@media (max-width: 640px) {
+  .workspace-home { gap: 2rem; }
+  .workspace-home__continue { align-items: flex-start; flex-direction: column; }
+  .workspace-home__recent a { flex-direction: column; gap: .4rem; }
+  .workspace-home__recent small { flex-shrink: 1; }
+}

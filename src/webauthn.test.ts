@@ -1,3 +1,4 @@
+import { registerVerifiedAccount, verificationToken } from "./testAccounts.js";
 import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -56,7 +57,6 @@ after(async () => {
   }
 
   await app.close();
-  await redis.flushdb();
   await closeRedis();
   await pool.end();
 });
@@ -96,11 +96,7 @@ test("authenticated user can request passkey registration options", async () => 
   const input = validRegistration();
   createdEmails.push(input.email);
 
-  const registerResponse = await app.inject({
-    method: "POST",
-    url: "/v1/auth/register",
-    payload: input,
-  });
+  const registerResponse = await registerVerifiedAccount(app, input);
 
   assert.equal(registerResponse.statusCode, 201);
 

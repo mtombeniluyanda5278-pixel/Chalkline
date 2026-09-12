@@ -55,7 +55,7 @@ try {
   maintenance.unref();
   await app.listen({
     port: config.PORT,
-    host: "0.0.0.0",
+    host: config.NODE_ENV === "development" ? "127.0.0.1" : "0.0.0.0",
   });
 } catch (err) {
   console.error(

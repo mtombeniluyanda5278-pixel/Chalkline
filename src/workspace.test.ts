@@ -1,5 +1,6 @@
+import { registerVerifiedAccount, verificationToken } from "./testAccounts.js";
 import { objectStore } from "./storage.js";
-import { consumeRateLimit } from "./rateLimit.js";
+import { buckets, consumeRateLimit } from "./rateLimit.js";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -17,6 +18,7 @@ import { connectRedis, closeRedis, clearTestRateLimits } from "./rateLimit.js";
 import { createOneTimeToken, hashToken } from "./sessions.js";
 import { config } from "./config.js";
 import { validateFile, safeFilename } from "./fileValidation.js";
+import { runScanJobs } from "./scanJobs.js";
 import { runMaintenance } from "./worker.js";
 import { encryptMail, decryptMail } from "./mail.js";
 const app = await buildApp();
@@ -63,14 +65,12 @@ function cookies(response: { headers: Record<string, unknown> }) {
     .map((v) => String(v).split(";")[0])
     .join("; ");
 }
-async function account() {
+async function account(verified = false) {
   const suffix = randomUUID().slice(0, 8),
     email = `test-${suffix}@example.com`,
     password = "correct horse battery staple";
-  const r = await app.inject({
-    method: "POST",
-    url: "/v1/auth/register",
-    payload: {
+  const r = await registerVerifiedAccount(app, {
+      trustDevice: true,
       firstName: "Teacher",
       lastName: "Test",
       country: "ZA",
@@ -86,11 +86,15 @@ async function account() {
         postalCode: "8001",
         country: "ZA",
       },
-    },
-  });
+    });
   assert.equal(r.statusCode, 201, r.body);
   const id = r.json().user.id;
   users.push(id);
+  if (!verified) await pool.query("UPDATE users SET email_verified_at=NULL WHERE id=$1", [id]);
+  if (verified)
+    await pool.query("UPDATE users SET email_verified_at=now() WHERE id=$1", [
+      id,
+    ]);
   return { id, email, password, cookie: cookies(r) };
 }
 async function doc(cookie: string, kind = "note") {
@@ -485,12 +489,21 @@ test(
   "private file lifecycle, ownership, attachment constraints and deletion outbox",
   { skip: !s3 },
   async () => {
-    const a = await account(),
+    const a = await account(true),
       b = await account(),
       lesson = await doc(a.cookie, "lesson");
     const r = await upload(a.cookie);
-    assert.equal(r.statusCode, 201, r.body);
+    assert.equal(r.statusCode, 202, r.body);
     const id = r.json().item.id;
+    for (const route of ["download", "content", "preview"]) {
+      const pending = await app.inject({
+        method: "GET",
+        url: `/v1/resources/${id}/${route}`,
+        headers: { cookie: a.cookie },
+      });
+      assert.equal(pending.statusCode, 404, pending.body);
+    }
+    await runScanJobs();
     const get = await app.inject({
       method: "GET",
       url: "/v1/resources/" + id + "/download",
@@ -662,7 +675,7 @@ test(
   "upload limits reject oversized resources before persistence",
   { skip: !s3 },
   async () => {
-    const a = await account();
+    const a = await account(true);
     const r = await upload(
       a.cookie,
       "large.txt",
@@ -708,8 +721,10 @@ test(
   "storage deletion failures remain queued and are retried",
   { skip: !s3 },
   async () => {
-    const a = await account();
+    const a = await account(true);
     const r = await upload(a.cookie);
+    assert.equal(r.statusCode, 202, r.body);
+    await runScanJobs();
     const id = r.json().item.id,
       key = (
         await pool.query("SELECT object_key FROM resources WHERE id=$1", [id])
@@ -719,6 +734,12 @@ test(
       url: "/v1/resources/" + id,
       headers: { cookie: a.cookie },
     });
+    const purged = await app.inject({
+      method: "DELETE",
+      url: `/v1/trash/resources/${id}`,
+      headers: { cookie: a.cookie },
+    });
+    assert.equal(purged.statusCode, 200, purged.body);
     const store = objectStore(),
       original = store.delete;
     try {
@@ -752,8 +773,74 @@ test(
   },
 );
 test("upload abuse bucket blocks requests independently of the global limit", async () => {
-  const a = await account();
-  for (let i = 0; i < 15; i++) await consumeRateLimit("upload", a.id);
+  const a = await account(true);
+  for (let i = 0; i < buckets.upload.max; i++)
+    await consumeRateLimit("upload", a.id);
   const response = await upload(a.cookie);
   assert.equal(response.statusCode, 429);
 });
+
+test(
+  "quarantined files keep their purge deadline after moving to Trash",
+  { skip: !s3 },
+  async () => {
+    const a = await account(true);
+    const uploaded = await upload(
+      a.cookie,
+      "unsafe.html",
+      Buffer.from("<script>alert(1)</script>"),
+      "text/html",
+    );
+    assert.equal(uploaded.statusCode, 202, uploaded.body);
+    const id = uploaded.json().item.id;
+    await runScanJobs();
+    const row = (
+      await pool.query("SELECT status,object_key FROM resources WHERE id=$1", [
+        id,
+      ])
+    ).rows[0];
+    assert.equal(row.status, "quarantined");
+    const trashed = await app.inject({
+      method: "DELETE",
+      url: `/v1/resources/${id}`,
+      headers: { cookie: a.cookie },
+    });
+    assert.equal(trashed.statusCode, 200, trashed.body);
+    const restore = await app.inject({
+      method: "POST",
+      url: `/v1/trash/resources/${id}/restore`,
+      headers: { cookie: a.cookie },
+    });
+    assert.equal(restore.statusCode, 404);
+    await pool.query(
+      "UPDATE resources SET scanned_at=now()-(($2::int+1)*interval '1 hour') WHERE id=$1",
+      [id, config.MALWARE_QUARANTINE_RETENTION_HOURS],
+    );
+    await runMaintenance();
+    assert.equal(
+      (await pool.query("SELECT id FROM resources WHERE id=$1", [id])).rowCount,
+      0,
+    );
+    const versions = await s3!.send(
+      new ListObjectVersionsCommand({
+        Bucket: config.STORAGE_BUCKET,
+        Prefix: row.object_key,
+      }),
+    );
+    assert.equal(versions.Versions?.length ?? 0, 0);
+  },
+);
+test(
+  "unverified accounts cannot reserve file storage",
+  { skip: !s3 },
+  async () => {
+    const a = await account();
+    const response = await upload(a.cookie);
+    assert.equal(response.statusCode, 403, response.body);
+    assert.equal(
+      (await pool.query("SELECT id FROM resources WHERE user_id=$1", [a.id]))
+        .rowCount,
+      0,
+    );
+  },
+);

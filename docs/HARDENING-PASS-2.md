@@ -4,6 +4,34 @@ Stopped on the user's explicit request to conserve their remaining usage limit, 
 
 ## Scope and source
 
+### Closed auth/local-development follow-up — 2026-09-12
+
+Retained logout/refresh regressions; cookie expiry now follows database expiry. Active-session listing shares authentication validity checks and omits IPs. Added dedicated user/session-bound passkey step-up, typed trustDevice propagation, conditional trust events, fresh-password authorization, safe post-commit registration partial success, and generic registration conflicts. Homepage CTAs now follow server-backed auth state, with navigation/share regressions. The normal `docker compose up -d` / `npm run dev` workflow serves the full app at `http://127.0.0.1:3000`, using generated ignored local credentials, separate persistent local volumes and restricted runtime/test roles. Existing `.env` files and migrations 001–012 were not edited.
+
+Final checks: build passed; `npm test` 50 passed, 0 failed, 5 storage-dependent skips; integration 55 passed, 0 failed, 0 skipped; frontend/unit 7 passed; all five requested frontend syntax checks and diff whitespace check passed. Local HTTP serving and role restrictions were verified. Native browser automation could not start because its sandbox runtime failed; browser behavior was exercised with JSDOM plus the real API and a cookie jar.
+
+Two limits remain within this pass: generic conflict messages do **not** provide full enumeration resistance while new registrations immediately receive a usable session (the verification-before-first-session product decision is pending); repository-wide formatting still reports 17 pre-existing files left unchanged to respect closed scope. No verification-first replacement was started. Remaining historical items below are not a claim that these newly completed auth items remain broken, nor does this pass complete the earlier broad specification.
+
+### Resumption progress — 2026-09-12
+
+- Reproduced the recorded frontend failure and all seven integration failures. Updated fixtures for the Chix label, explicit device trust, verified upload accounts, asynchronous scanning, explicit Trash purge and the configured upload bucket limit.
+- Added assertions that pending files cannot be downloaded, streamed or previewed, and that unverified uploads do not create resource rows.
+- Fixed quarantine retention after moving a file to Trash: maintenance now preserves the quarantine deadline. Added a regression covering rejected restoration, expired quarantine cleanup and removal of stored object versions.
+- Verification on this resumed snapshot: `npm run test:unit` passed 6/6; isolated `npm run test:integration` passed 37/37 with no skips; `npm run build` and `git diff --check` passed. Integration used the private scanner mock, not live ClamAV.
+- The historical failures below are resolved by this resumption. The broader 95-scenario matrix, remaining implementation gaps and separate audits are still unfinished; these passing tests do not establish deployment readiness.
+
+### Logout → refresh regression — 2026-09-12
+
+The reported sequence was reproduced locally against the original code with a host-only session cookie plus a second valid parent-domain session cookie. Logout returned 200 and expired the host-only cookie, but only revoked the parser's first token; the surviving domain cookie then made `/v1/me` return 200. This establishes a concrete reproduction, not evidence that the reporting user's browser had that cookie configuration. The normal single-cookie deletion scope was already correct (`Path=/`, no Domain); its missing HttpOnly/Strict attributes were option drift, not proof that single-cookie expiration failed.
+
+A separate reproduced frontend race allowed a delayed authenticated `/v1/me` response to restore `state.user` after successful logout. This race affects in-memory state; it does not alone explain authentication after a fresh page load.
+
+Changes centralize session cookie options, atomically revoke every session token supplied on logout, and invalidate outstanding frontend session reads when logout starts. Session reads ignore revoked legacy tokens and reject ambiguity between multiple valid sessions. Sign-in also revokes supplied old tokens so legacy cookies cannot interfere with session replacement. API fetches explicitly bypass caches; server responses already use `Cache-Control: no-store`. Trusted-device cookies remain independent of authentication and are preserved on logout.
+
+`src/logout.test.ts` covers requested cases A–E with the real Fastify API, isolated PostgreSQL/Redis, the actual frontend module, JSDOM startup, and a cookie jar applying server Set-Cookie headers. It verifies original-token replay returns 401, database deletion, cookie scope/expiry, device-only 401, cleared user/address state, fresh-page guest rendering, normal authenticated refresh, delayed-response rejection, failed-logout state preservation, duplicate domain/path cookies, and successful sign-in after logout despite revoked legacy cookies. These are local simulations, not a deployed Chrome/Safari session inspection.
+
+Original-code comparison failed the duplicate-cookie refresh assertion (200 instead of 401), delayed-response assertion (user restored instead of null), and cookie-option consistency assertion. Working changes were restored afterward. Final verification: integration 40/40 passed with no skips, frontend/unit 6/6 passed, build passed, and `git diff --check` passed. No deployment or production session revocation was performed.
+
 User specification: attachment `225fb568-18fa-4868-b424-5384cf7c2f4c/pasted-text.txt`, 4,213 lines, sections A–CF, with a required 95-scenario regression matrix. Original local path: `/Users/luyandamtombeni/.codex/attachments/225fb568-18fa-4868-b424-5384cf7c2f4c/pasted-text.txt`. No production migration/deployment was performed. Local integration tests used isolated containers.
 
 ## Code added or changed, not fully verified

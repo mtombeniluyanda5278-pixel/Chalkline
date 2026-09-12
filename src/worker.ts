@@ -20,7 +20,7 @@ export async function runMaintenance(){
   const deleted=(await c.query("DELETE FROM resources WHERE id=$1 AND status='uploading' RETURNING size_bytes",[row.id])).rows[0];
   if(deleted)await c.query('UPDATE user_usage SET storage_reserved_bytes=storage_reserved_bytes-$2 WHERE user_id=$1',[row.user_id,deleted.size_bytes]);
  });
- const purge=(await pool.query("SELECT id FROM resources WHERE (status='quarantined' AND scanned_at<now()-($1::int*interval '1 hour')) OR (status='trashed' AND trashed_at<now()-($2::int*interval '1 day')) LIMIT 20",[config.MALWARE_QUARANTINE_RETENTION_HOURS,config.TRASH_RETENTION_DAYS])).rows;
+ const purge=(await pool.query("SELECT id FROM resources WHERE ((status='quarantined' OR (status='trashed' AND previous_status='quarantined')) AND scanned_at<now()-($1::int*interval '1 hour')) OR (status='trashed' AND trashed_at<now()-($2::int*interval '1 day')) LIMIT 20",[config.MALWARE_QUARANTINE_RETENTION_HOURS,config.TRASH_RETENTION_DAYS])).rows;
  for(const row of purge)await queuePurge(row.id);
  await pool.query("DELETE FROM documents WHERE id IN (SELECT id FROM documents WHERE trashed_at<now()-($1::int*interval '1 day') LIMIT 100)",[config.TRASH_RETENTION_DAYS]);
  if(storageConfigured())for(let n=0;n<20;n++){
@@ -50,14 +50,15 @@ export async function runMaintenance(){
   const row=(await pool.query("UPDATE notification_outbox SET lease_token=$1,lease_until=now()+interval '1 minute' WHERE id=(SELECT id FROM notification_outbox WHERE state='pending' AND recipient IS NOT NULL AND encrypted_body IS NOT NULL AND available_at<=now() AND expires_at>now() AND (lease_until IS NULL OR lease_until<now()) ORDER BY available_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *",[lease])).rows[0];
   if(!row)break;
   try{
-   await adapter.send({to:row.recipient,subject:row.subject,body:decryptMail(row.encrypted_body)});
+   await adapter.send({to:row.recipient,subject:row.subject,body:decryptMail(row.encrypted_body),idempotencyKey:row.dedupe_key??`mail:${row.id}`});
    await pool.query("UPDATE notification_outbox SET state='sent',encrypted_body=NULL,recipient=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2",[row.id,lease]);
   }catch{
    await pool.query("UPDATE notification_outbox SET attempts=attempts+1,state=CASE WHEN attempts>=7 THEN 'dead' ELSE 'pending' END,lease_until=NULL,available_at=now()+(least(3600,30*power(2,attempts))*interval '1 second') WHERE id=$1 AND lease_token=$2",[row.id,lease]);
   }
  }
  await pool.query("DELETE FROM security_events WHERE investigation_hold=false AND created_at<now()-($1::int*interval '1 day')",[config.SECURITY_RETENTION_DAYS]);
- await pool.query("UPDATE notification_outbox SET encrypted_body=NULL,recipient=NULL,state='dead' WHERE expires_at<=now() AND state='pending'");
+ await pool.query("UPDATE notification_outbox SET encrypted_body=NULL,recipient=NULL,state='dead',lease_until=NULL WHERE expires_at<=now() AND state<>'sent' AND (encrypted_body IS NOT NULL OR recipient IS NOT NULL)");
+ await pool.query("DELETE FROM document_revisions WHERE created_at<now()-interval '30 days'");
  await pool.query("DELETE FROM notification_outbox WHERE expires_at<now()-interval '30 days'");
  await pool.query("DELETE FROM device_challenges WHERE expires_at<now()-interval '1 day'");
  await pool.query("DELETE FROM sessions WHERE expires_at<=now() OR last_active_at+idle_seconds*interval '1 second'<=now()");

@@ -27,6 +27,7 @@ const WebAuthnRegistrationResponseSchema = z.strictObject({
     attestationObject: z.string().min(1),
   }),
   type: z.literal("public-key"),
+  clientExtensionResults: z.object({}).default({}),
   deviceName: z.unknown().optional(),
 });
 
@@ -40,6 +41,8 @@ const WebAuthnAuthenticationResponseSchema = z.strictObject({
     userHandle: z.string().optional(),
   }),
   type: z.literal("public-key"),
+  clientExtensionResults: z.object({}).default({}),
+  trustDevice: z.boolean().default(false),
 });
 
 const LOGIN_CHALLENGE_COOKIE = "chalkline_webauthn";
@@ -321,6 +324,94 @@ export async function registerWebAuthnRoutes(
     return { ok: true };
   });
 
+  // Step-up is bound to an existing user/session and cannot issue login cookies.
+  app.post("/v1/auth/passkeys/step-up/options", async (req, reply) => {
+    const user = await requireUser(req, reply);
+    if (!user) return;
+    if (!(await consumeRateLimit("webauthn", user.id)).allowed)
+      return reply
+        .code(429)
+        .send({ error: "Too many requests. Try again later." });
+    const credentials = await pool.query(
+      "SELECT credential_id FROM webauthn_credentials WHERE user_id=$1",
+      [user.id],
+    );
+    if (!credentials.rowCount)
+      return reply
+        .code(400)
+        .send({ error: "No passkey is registered for this account." });
+    const options = await generateAuthenticationOptions({
+      rpID: config.WEBAUTHN_RP_ID,
+      userVerification: "required",
+      allowCredentials: credentials.rows.map((c) => ({
+        id: c.credential_id.toString("base64url"),
+      })),
+    });
+    await putChallenge(`step:${user.id}:${user.sessionId}`, options.challenge);
+    return options;
+  });
+  app.post("/v1/auth/passkeys/step-up/verify", async (req, reply) => {
+    const user = await requireUser(req, reply);
+    if (!user) return;
+    if (!(await consumeRateLimit("webauthn", user.id)).allowed)
+      return reply
+        .code(429)
+        .send({ error: "Too many requests. Try again later." });
+    const expectedChallenge = await takeChallenge(
+      `step:${user.id}:${user.sessionId}`,
+    );
+    const parsed = WebAuthnAuthenticationResponseSchema.omit({
+      trustDevice: true,
+    }).safeParse(req.body);
+    if (!expectedChallenge || !parsed.success)
+      return reply
+        .code(401)
+        .send({ error: "Passkey confirmation expired or invalid." });
+    try {
+      await transaction(async (c) => {
+        const credentialId = Buffer.from(parsed.data.id, "base64url");
+        const row = (
+          await c.query(
+            "SELECT public_key,counter FROM webauthn_credentials WHERE credential_id=$1 AND user_id=$2 FOR UPDATE",
+            [credentialId, user.id],
+          )
+        ).rows[0];
+        if (!row) throw failure(401, "Passkey confirmation failed.");
+        const verification = await verifyAuthenticationResponse({
+          response: parsed.data as AuthenticationResponseJSON,
+          expectedChallenge,
+          expectedOrigin: config.WEBAUTHN_ORIGIN,
+          expectedRPID: config.WEBAUTHN_RP_ID,
+          requireUserVerification: true,
+          credential: {
+            id: parsed.data.id,
+            publicKey: new Uint8Array(row.public_key),
+            counter: Number(row.counter),
+          },
+        });
+        if (!verification.verified)
+          throw failure(401, "Passkey confirmation failed.");
+        const updated = await c.query(
+          `UPDATE sessions s SET reauthenticated_at=now(),auth_method='passkey'
+          FROM users u WHERE s.id=$1 AND s.user_id=$2 AND u.id=s.user_id
+          AND s.auth_epoch=u.auth_epoch AND u.suspended_at IS NULL AND s.expires_at>now()
+          AND s.last_active_at+s.idle_seconds*interval '1 second'>now()
+          AND (s.device_id IS NULL OR EXISTS(SELECT 1 FROM trusted_devices d WHERE d.id=s.device_id AND d.user_id=u.id AND d.revoked_at IS NULL AND d.expires_at>now())) RETURNING s.id`,
+          [user.sessionId, user.id],
+        );
+        if (!updated.rowCount)
+          throw failure(401, "Session expired. Sign in again.");
+        await c.query(
+          "UPDATE webauthn_credentials SET counter=$2 WHERE credential_id=$1",
+          [credentialId, verification.authenticationInfo.newCounter],
+        );
+      });
+    } catch {
+      return reply.code(401).send({ error: "Passkey confirmation failed." });
+    }
+    return { ok: true };
+  });
+
   // ---------------------------------------------------------------------------
   // PASSKEY LOGIN — OPTIONS
   // ---------------------------------------------------------------------------
@@ -415,18 +506,23 @@ export async function registerWebAuthnRoutes(
       return reply.code(401).send({ error: "Passkey sign-in failed." });
     }
 
-    const verification = await verifyAuthenticationResponse({
-      response: body,
-      expectedChallenge: stored,
-      expectedOrigin: config.WEBAUTHN_ORIGIN,
-      expectedRPID: config.WEBAUTHN_RP_ID,
-      requireUserVerification: true,
-      credential: {
-        id: body.id,
-        publicKey: new Uint8Array(row.public_key),
-        counter: Number(row.counter),
-      },
-    });
+    let verification;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: body,
+        expectedChallenge: stored,
+        expectedOrigin: config.WEBAUTHN_ORIGIN,
+        expectedRPID: config.WEBAUTHN_RP_ID,
+        requireUserVerification: true,
+        credential: {
+          id: body.id,
+          publicKey: new Uint8Array(row.public_key),
+          counter: Number(row.counter),
+        },
+      });
+    } catch {
+      return reply.code(401).send({ error: "Passkey sign-in failed." });
+    }
 
     if (!verification.verified) {
       return reply.code(401).send({ error: "Passkey sign-in failed." });
@@ -446,7 +542,14 @@ export async function registerWebAuthnRoutes(
       });
     }
 
-    await completeSignIn(req, reply, row.user_id, "passkey", row.auth_epoch);
+    await completeSignIn(
+      req,
+      reply,
+      row.user_id,
+      "passkey",
+      parsedBody.data.trustDevice,
+      row.auth_epoch,
+    );
 
     return { ok: true };
   });

@@ -1,3 +1,4 @@
+import { registerVerifiedAccount, verificationToken } from "./testAccounts.js";
 import { randomUUID } from "node:crypto";
 import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -92,15 +93,11 @@ test("GET /v1/me without a session returns 401", async () => {
   assert.equal(response.json().code, "UNAUTHENTICATED");
 });
 
-test("POST /v1/auth/register creates a user and session", async () => {
+test("registration plus email verification creates a user and session", async () => {
   const input = validRegistration();
   createdEmails.push(input.email);
 
-  const response = await app.inject({
-    method: "POST",
-    url: "/v1/auth/register",
-    payload: input,
-  });
+  const response = await registerVerifiedAccount(app, input);
 
   assert.equal(response.statusCode, 201);
 
@@ -122,7 +119,7 @@ test("POST /v1/auth/register creates a user and session", async () => {
   );
 
   assert.equal(dbResult.rowCount, 1);
-  assert.equal(dbResult.rows[0].email_verified_at, null);
+  assert.ok(dbResult.rows[0].email_verified_at);
   assert.ok(dbResult.rows[0].password_hash);
 });
 
@@ -130,11 +127,7 @@ test("POST /v1/auth/login authenticates an existing user", async () => {
   const input = validRegistration();
   createdEmails.push(input.email);
 
-  const registerResponse = await app.inject({
-    method: "POST",
-    url: "/v1/auth/register",
-    payload: input,
-  });
+  const registerResponse = await registerVerifiedAccount(app, { ...input, trustDevice: true });
 
   assert.equal(registerResponse.statusCode, 201);
 
@@ -168,11 +161,7 @@ test("authenticated GET /v1/me returns the current user", async () => {
   const input = validRegistration();
   createdEmails.push(input.email);
 
-  const registerResponse = await app.inject({
-    method: "POST",
-    url: "/v1/auth/register",
-    payload: input,
-  });
+  const registerResponse = await registerVerifiedAccount(app, input);
 
   assert.equal(registerResponse.statusCode, 201);
 
@@ -194,11 +183,7 @@ test("POST /v1/auth/logout destroys the current session", async () => {
   const input = validRegistration();
   createdEmails.push(input.email);
 
-  const registerResponse = await app.inject({
-    method: "POST",
-    url: "/v1/auth/register",
-    payload: input,
-  });
+  const registerResponse = await registerVerifiedAccount(app, input);
 
   assert.equal(registerResponse.statusCode, 201);
 

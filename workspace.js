@@ -1,4 +1,4 @@
-import {mountReader} from "./readers.js";
+import { mountReader } from "./readers.js";
 import { createAutosave } from "./autosave.js";
 let ui,
   editor = null,
@@ -77,7 +77,15 @@ function list(items, kind) {
               ),
               E("span", {}, [
                 E("strong", {}, item.title),
-                ...(item.status && item.status!=="ready" ? [E("small",{role:"status"},item.status.replaceAll("_"," "))] : []),
+                ...(item.status && item.status !== "ready"
+                  ? [
+                      E(
+                        "small",
+                        { role: "status" },
+                        item.status.replaceAll("_", " "),
+                      ),
+                    ]
+                  : []),
                 E(
                   "small",
                   {},
@@ -148,6 +156,7 @@ export function hasUnsaved() {
   return Boolean(editor?.save.dirty());
 }
 export async function renderHome() {
+  if (ui.state.user) return renderDashboard();
   const { viewRoot: root } = ui;
   const share = E("div", { class: "share-panel", hidden: true });
   const url = location.origin + location.pathname;
@@ -164,6 +173,7 @@ export async function renderHome() {
         await navigator.clipboard.writeText(url);
         ui.toast("Chix link copied.", "success");
       } catch {
+        urlInput.focus();
         urlInput.select();
         ui.toast("Select and copy the address above.");
       }
@@ -179,7 +189,11 @@ export async function renderHome() {
             url,
           });
         } catch (err) {
-          if (err.name !== "AbortError") throw err;
+          if (err.name !== "AbortError") {
+            urlInput.focus();
+            urlInput.select();
+            ui.toast("Sharing unavailable. Copy the address above.");
+          }
         }
       }),
     );
@@ -235,14 +249,23 @@ export async function renderHome() {
         E("h2", {}, "A calmer teaching day starts here."),
       ]),
       E("div", { class: "btn-row" }, [
-        link("Sign in", "/login"),
-        E(
-          "a",
-          { href: "#/register", class: "btn btn--primary" },
-          "Create account →",
-        ),
+        ...(ui.state.user
+          ? [
+              E(
+                "a",
+                { href: "#/dashboard", class: "btn btn--primary" },
+                "Open your workspace",
+              ),
+            ]
+          : [
+              link("Sign in", "/login"),
+              E(
+                "a",
+                { href: "#/register", class: "btn btn--primary" },
+                "Create account",
+              ),
+            ]),
         toggle,
-        ui.state.user ? link("Open workspace", "/dashboard") : null,
       ]),
       share,
     ]),
@@ -254,25 +277,9 @@ export async function renderHome() {
   );
 }
 export async function renderDashboard(scheduleOnly = false) {
-  const root = ui.viewRoot,
-    data = await api("/v1/workspace?today=" + today());
-  root.append(
-    head(
-      scheduleOnly
-        ? "Your teaching schedule"
-        : ui.greetingForNow() + ", " + ui.state.user.firstName + ".",
-      scheduleOnly
-        ? "A clear view of what’s coming next."
-        : "Settle in. Your work is right where you left it.",
-    ),
-  );
-  try{
-    const prefs=await api("/v1/me/preferences");ui.state.preferences=prefs;
-    if(!prefs.onboarded)root.append(section("Your teaching profile",link("Set up Chix for your teaching","/onboarding")));
-    if(!ui.state.user.emailVerified)root.append(E("p",{class:"notice"},"Verify your email to upload files. You can already write notes and plan lessons."));
-    root.append(E("nav",{class:"btn-row"},[link("Feedback","/feedback"),link("Trash","/trash"),link("Preferences","/preferences"),...(prefs.role==="admin"?[link("Administration","/admin")]:[])]));
-    if(prefs.birthday){const key="chix-birthday:"+prefs.today;let seen=false;try{seen=localStorage.getItem(key)==="shown";}catch{}if(!seen){const greeting=E("p",{class:"birthday-note"},"Happy birthday, "+ui.state.user.firstName+". Wishing you a lovely day.");root.append(greeting);if(!matchMedia("(prefers-reduced-motion: reduce)").matches)greeting.classList.add("chalk-confetti");try{localStorage.setItem(key,"shown");}catch{}}}
-  }catch{}
+  const root = ui.viewRoot;
+  const data = await api("/v1/workspace?today=" + today());
+  if (scheduleOnly) root.append(head("Your teaching schedule", "A clear view of what’s coming next."));
   if (scheduleOnly) {
     const f = ui.field({ label: "View lessons on a date", type: "date" });
     f.input.value = today();
@@ -303,68 +310,45 @@ export async function renderDashboard(scheduleOnly = false) {
     await load();
     return;
   }
-  root.append(
-    E("div", { class: "btn-row" }, [
-      button("+ New lesson", () => create("lesson"), "primary"),
-      button("+ New note", () => create("note")),
-      link("Upload resource", "/files"),
-    ]),
-  );
-  const last = data.resume[0];
-  root.append(
-    E("section", { class: "continue-card" }, [
-      E("div", {}, [
-        E("p", { class: "eyebrow" }, "CONTINUE WHERE YOU LEFT OFF"),
-        E("h2", {}, last ? last.title : "Your next chapter starts here."),
-        E(
-          "p",
-          {},
-          last
-            ? [
-                last.state.page ? "Page " + last.state.page + " · " : "",
-                last.state.field ? "Editing " + last.state.field + " · " : "",
-                "Last opened " + ui.formatDateTime(last.opened_at),
-              ].join("")
-            : "Create a note or lesson. We’ll keep your place for next time.",
-        ),
-      ]),
-      last
-        ? E(
-            "a",
-            { class: "btn btn--light", href: "#" + routeFor(last) },
-            "Continue →",
-          )
-        : button("Create a lesson", () => create("lesson")),
-    ]),
-  );
-  root.append(
-    E("div", { class: "section-grid" }, [
-      section(
-        "Recent notes",
-        list(data.notes, "note"),
-        link("All notes", "/notes"),
-      ),
-      section(
-        "Upcoming lessons",
-        list(data.lessons.slice(0, 5), "lesson"),
-        link("Schedule", "/schedule"),
-      ),
-      section(
-        "Recent files",
-        list(data.files, "file"),
-        link("All files", "/files"),
-      ),
-      section("Recently edited", list(data.activity, "document")),
-    ]),
-  );
-  const devices = await api("/v1/me/devices");
-  if (devices.pending.length)
-    root.prepend(
-      E("div", { class: "form-error" }, [
-        E("p", {}, "A new browser is waiting for your approval."),
-        link("Review sign-in requests", "/devices"),
-      ]),
-    );
+
+  const home = E("div", {class:"workspace-home"});
+  root.append(home);
+  home.append(E("header", {class:"workspace-home__greeting"}, [
+    E("p", {class:"eyebrow"}, "YOUR WORKSPACE"),
+    E("h1", {}, ui.state.user.firstName ? "Welcome back, " + ui.state.user.firstName : "Welcome back"),
+    E("p", {}, "A little space for your next idea."),
+  ]), E("div", {class:"btn-row", "aria-label":"Create something new"}, [
+    button("New note", () => create("note"), "primary"),
+    button("New lesson plan", () => create("lesson")),
+    link("Upload file", "/files"),
+  ]));
+  const type = item => ({note:"Note",lesson:"Lesson plan",template:"Template",file:"File"})[item.kind] ?? "Document";
+  const route = item => (item.kind === "file" ? "/file?id=" : "/editor?id=") + encodeURIComponent(item.item_id ?? item.id);
+  const stamp = item => item.opened_at ?? item.updated_at ?? item.created_at;
+  const metadata = item => type(item) + (stamp(item) ? " · " + ui.formatDateTime(stamp(item)) : "");
+  const last = data.resume?.[0];
+  home.append(E("section", {class:"workspace-home__continue", "aria-labelledby":"continue-heading"}, [
+    E("div", {}, [E("h2", {id:"continue-heading"}, "Continue where you left off"),
+      ...(last ? [E("h3", {}, last.title), E("p", {}, metadata(last))]
+        : [E("p", {}, "Start something new or open an existing item.")]),
+    ]), ...(last ? [link("Continue", route(last))] : []),
+  ]));
+  try {
+    const templates = (await api("/v1/documents?kind=template")).items.slice(0,4);
+    if (templates.length) home.append(E("section", {"aria-labelledby":"templates-heading"}, [
+      E("div", {class:"workspace-home__section-head"}, [E("h2", {id:"templates-heading"}, "Templates"),link("View all templates","/templates")]),
+      E("div", {class:"workspace-home__templates"}, templates.map(item => E("a", {class:"workspace-home__template",href:"#"+route(item)}, [E("span", {}, item.title),E("small", {}, "Open template")]))),
+    ]));
+  } catch { home.append(E("p",{class:"card__hint"},"Templates are unavailable right now.")); }
+  const seen = new Set();
+  const recent = [...(data.resume??[]),...(data.activity??[]),...(data.files??[]).map(item=>({...item,kind:"file"}))]
+    .sort((a,b)=>(Date.parse(stamp(b))||0)-(Date.parse(stamp(a))||0))
+    .filter(item=>{const key=route(item);if(seen.has(key))return false;seen.add(key);return true;}).slice(0,8);
+  home.append(E("section", {"aria-labelledby":"recent-heading"}, [
+    E("div", {class:"workspace-home__section-head"}, [E("h2", {id:"recent-heading"}, "Recent"),E("nav",{"aria-label":"Browse your work"},[link("All notes","/notes"),link("All lesson plans","/lessons"),link("All files","/files")])]),
+    recent.length ? E("ul", {class:"workspace-home__recent"}, recent.map(item=>E("li",{},E("a",{href:"#"+route(item)},[E("span",{},item.title),E("small",{},metadata(item))]))))
+      : E("p", {class:"card__hint"}, "Your recent work will appear here."),
+  ]));
 }
 export async function renderDocuments(kind) {
   const root = ui.viewRoot,
@@ -487,9 +471,26 @@ export async function renderEditor(params) {
       ]),
     );
   }
-  if(item.kind!=="note"){
-    const groups={Overview:["subject","grade","topic","date","duration"],Planning:["objectives","priorKnowledge","resources"],"Lesson flow":["introduction","teachingActivities","learnerActivities"],"Assessment & support":["assessment","differentiation","homework"],"After lesson":["reflection","notes"]};
-    for(const [name,keys] of Object.entries(groups)){const details=E("details",{class:"lesson-group",open:true},[E("summary",{},name)]);for(const key of keys)if(inputs[key])details.append(inputs[key].parentElement);form.append(details);}
+  if (item.kind !== "note") {
+    const groups = {
+      Overview: ["subject", "grade", "topic", "date", "duration"],
+      Planning: ["objectives", "priorKnowledge", "resources"],
+      "Lesson flow": [
+        "introduction",
+        "teachingActivities",
+        "learnerActivities",
+      ],
+      "Assessment & support": ["assessment", "differentiation", "homework"],
+      "After lesson": ["reflection", "notes"],
+    };
+    for (const [name, keys] of Object.entries(groups)) {
+      const details = E("details", { class: "lesson-group", open: true }, [
+        E("summary", {}, name),
+      ]);
+      for (const key of keys)
+        if (inputs[key]) details.append(inputs[key].parentElement);
+      form.append(details);
+    }
   }
   const status = E(
       "p",
@@ -508,8 +509,15 @@ export async function renderEditor(params) {
     read,
     revision: item.revision,
     write: async (body) => {
-      try{return await api("/v1/documents/"+id,{method:"PATCH",body});}
-      catch(error){if(error.status===401){if(!await ui.reauthenticate())throw error;return api("/v1/documents/"+id,{method:"PATCH",body});}throw error;}
+      try {
+        return await api("/v1/documents/" + id, { method: "PATCH", body });
+      } catch (error) {
+        if (error.status === 401) {
+          if (!(await ui.reauthenticate())) throw error;
+          return api("/v1/documents/" + id, { method: "PATCH", body });
+        }
+        throw error;
+      }
     },
     onStatus: (message, err) => {
       status.textContent = message;
@@ -673,7 +681,9 @@ export async function renderEditor(params) {
       const files = await api("/v1/resources"),
         select = E("select", { "aria-label": "Choose resource to attach" }, [
           E("option", { value: "" }, "Choose a resource"),
-          ...files.items.filter(r=>r.status===undefined||r.status==="ready").map((r) => E("option", { value: r.id }, r.title)),
+          ...files.items
+            .filter((r) => r.status === undefined || r.status === "ready")
+            .map((r) => E("option", { value: r.id }, r.title)),
         ]);
       const attached = E("div", {});
       const refresh = async () => {
@@ -796,7 +806,13 @@ export async function renderFiles() {
         }),
     );
     maxBytes = r.uploadMaxBytes;
-    if(r.usage){input.disabled=!r.usage.verified;upload.disabled=!r.usage.verified;status.textContent=r.usage.verified ? `Storage: ${Math.ceil(Number(r.usage.storage_used_bytes)/1048576)} / ${Math.floor(Number(r.usage.storage_quota_bytes)/1048576)} MiB used.` : "Verify your email to upload files. Notes and lessons are available now.";}
+    if (r.usage) {
+      input.disabled = !r.usage.verified;
+      upload.disabled = !r.usage.verified;
+      status.textContent = r.usage.verified
+        ? `Storage: ${Math.ceil(Number(r.usage.storage_used_bytes) / 1048576)} / ${Math.floor(Number(r.usage.storage_quota_bytes) / 1048576)} MiB used.`
+        : "Verify your email to upload files. Notes and lessons are available now.";
+    }
     if (!append) results.replaceChildren();
     results.append(list(r.items, "file"));
     more.hidden = r.items.length < 20;
@@ -823,7 +839,7 @@ export async function renderFiles() {
         const response = await fetch("/v1/resources", {
           method: "POST",
           credentials: "same-origin",
-          headers:{"X-File-Size":String(file.size)},
+          headers: { "X-File-Size": String(file.size) },
           body,
         });
         const data = await response.json();
@@ -878,13 +894,59 @@ export async function renderFile(params) {
       Math.ceil(Number(item.size_bytes) / 1024) + " KB · " + item.mime,
     ),
   );
-  if(item.status && item.status!=="ready"){
-    const status=E("p",{role:"status"},["scan_failed","quarantined"].includes(item.status)?"This file is blocked. Scanning failed or the file was rejected. You can remove it and upload a safe replacement.":"Your file is being checked privately. It will open here once scanning succeeds.");
-    root.append(E("section",{class:"card"},[status,link("Back to files","/files"),...(["scan_failed","quarantined"].includes(item.status)?[button("Move to Trash",async()=>{await api("/v1/resources/"+id,{method:"DELETE"});ui.navigate("/files");})]:[])]));
-    let stopped=false,timer;const started=Date.now();
-    const poll=async()=>{if(stopped||Date.now()-started>300000)return;try{const r=await api("/v1/resources/"+id);if(r.item.status==="ready"){root.replaceChildren();await renderFile(params);return;}if(["scan_failed","quarantined"].includes(r.item.status)){status.textContent="This file could not pass scanning. Return to Files to remove it or retry later.";return;}}catch{status.textContent="Unable to check scan progress. Return to Files and try again.";return;}timer=setTimeout(poll,2000);};
-    if(!["scan_failed","quarantined"].includes(item.status))timer=setTimeout(poll,2000);
-    cleanup=()=>{stopped=true;clearTimeout(timer);};return;
+  if (item.status && item.status !== "ready") {
+    const status = E(
+      "p",
+      { role: "status" },
+      ["scan_failed", "quarantined"].includes(item.status)
+        ? "This file is blocked. Scanning failed or the file was rejected. You can remove it and upload a safe replacement."
+        : "Your file is being checked privately. It will open here once scanning succeeds.",
+    );
+    root.append(
+      E("section", { class: "card" }, [
+        status,
+        link("Back to files", "/files"),
+        ...(["scan_failed", "quarantined"].includes(item.status)
+          ? [
+              button("Move to Trash", async () => {
+                await api("/v1/resources/" + id, { method: "DELETE" });
+                ui.navigate("/files");
+              }),
+            ]
+          : []),
+      ]),
+    );
+    let stopped = false,
+      timer;
+    const started = Date.now();
+    const poll = async () => {
+      if (stopped || Date.now() - started > 300000) return;
+      try {
+        const r = await api("/v1/resources/" + id);
+        if (r.item.status === "ready") {
+          root.replaceChildren();
+          await renderFile(params);
+          return;
+        }
+        if (["scan_failed", "quarantined"].includes(r.item.status)) {
+          status.textContent =
+            "This file could not pass scanning. Return to Files to remove it or retry later.";
+          return;
+        }
+      } catch {
+        status.textContent =
+          "Unable to check scan progress. Return to Files and try again.";
+        return;
+      }
+      timer = setTimeout(poll, 2000);
+    };
+    if (!["scan_failed", "quarantined"].includes(item.status))
+      timer = setTimeout(poll, 2000);
+    cleanup = () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+    return;
   }
   const title = ui.field({
     label: "Display name",
@@ -913,7 +975,15 @@ export async function renderFile(params) {
   ]);
   root.append(
     E("div", { class: "btn-row" }, [
-      E("a",{class:"btn btn--ghost",href:"/v1/resources/"+id+"/download",download:item.title},"Download"),
+      E(
+        "a",
+        {
+          class: "btn btn--ghost",
+          href: "/v1/resources/" + id + "/download",
+          download: item.title,
+        },
+        "Download",
+      ),
       button(
         "Delete file",
         async () => {
@@ -926,7 +996,8 @@ export async function renderFile(params) {
           if (!result.confirmed) return;
           await api("/v1/resources/" + id, { method: "DELETE" });
           cleanup = () => {
-    stopReader();};
+            stopReader();
+          };
           ui.navigate("/files");
         },
         "danger",
@@ -953,7 +1024,17 @@ export async function renderFile(params) {
     ),
     preview,
   );
-  const stopReader=await mountReader({root:preview,item,resume,el:E,api,onPage:value=>{page.input.value=value;void persist().catch(()=>{});}});
+  const stopReader = await mountReader({
+    root: preview,
+    item,
+    resume,
+    el: E,
+    api,
+    onPage: (value) => {
+      page.input.value = value;
+      void persist().catch(() => {});
+    },
+  });
   preview.scrollTop = resume.scroll || 0;
   let timer;
   preview.addEventListener("scroll", () => {
@@ -1016,7 +1097,10 @@ export async function renderDeviceApproval(params) {
   async function complete() {
     const current = await api("/v1/devices/pending");
     if (current.status === "approved") {
-      await api("/v1/devices/complete", { method: "POST",body:{trustDevice:ui.state.trustDevice===true} });
+      await api("/v1/devices/complete", {
+        method: "POST",
+        body: { trustDevice: ui.state.trustDevice === true },
+      });
       await ui.loadSession();
       ui.navigate("/dashboard");
     } else

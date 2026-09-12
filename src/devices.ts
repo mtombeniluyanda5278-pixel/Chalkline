@@ -11,7 +11,7 @@ import {
   setSessionCookie,
   readSessionUser,
   destroySession,
-  SESSION_COOKIE,
+  sessionTokens,
 } from "./sessions.js";
 import { requireUser, requireRecentAuth } from "./auth.js";
 import { securityEvent } from "./security.js";
@@ -46,8 +46,8 @@ async function issue(
   authEpoch?: number,
   authMethod: "password" | "passkey" = "password",
 ) {
-  const old = req.cookies[SESSION_COOKIE];
-  if (old) await destroySession(old);
+  const [old, ...duplicates] = sessionTokens(req);
+  if (old) await destroySession(old, ...duplicates);
   const session = await createSession(userId, {
     ip: req.ip,
     userAgent: label(req),
@@ -69,8 +69,10 @@ export async function completeSignIn(
   reply: FastifyReply,
   userId: string,
   method: "password" | "passkey" | "registration",
+  trustDevice: boolean,
   authEpoch?: number,
 ) {
+  // Device trust only applies AFTER the caller verifies password/passkey.
   const known = req.cookies[DEVICE_COOKIE];
   const found = known
     ? (
@@ -80,20 +82,29 @@ export async function completeSignIn(
         )
       ).rows[0]
     : null;
-  if (found) {
+  if (found && method === "password") {
     await pool.query(
       "UPDATE trusted_devices SET last_seen_at=now() WHERE id=$1",
       [found.id],
     );
-    await issue(req, reply, userId, found.id, undefined, authEpoch, method==="passkey"?"passkey":"password");
+    await issue(req, reply, userId, found.id, undefined, authEpoch, "password");
     return null;
   }
   // Verified UV passkey and account creation establish trust without another device.
   if (method === "passkey" || method === "registration") {
-    const wantsTrust=(req.body as {trustDevice?:boolean})?.trustDevice===true;
-    const device = wantsTrust ? await transaction((c) => trust(c, userId, label(req))) : undefined;
-    await issue(req, reply, userId, device?.id, device?.raw, authEpoch,method==="passkey"?"passkey":"password");
-    await securityEvent(userId, "device_trusted_" + method, req.ip);
+    const device = trustDevice
+      ? await transaction((c) => trust(c, userId, label(req)))
+      : undefined;
+    await issue(
+      req,
+      reply,
+      userId,
+      device?.id,
+      device?.raw,
+      authEpoch,
+      method === "passkey" ? "passkey" : "password",
+    );
+    if (device) await securityEvent(userId, "device_trusted_" + method, req.ip);
     return null;
   }
   await limit("deviceChallenge", userId);
@@ -142,6 +153,10 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
   app.post("/v1/devices/complete", async (req, reply) => {
     await limit("deviceApproval", req.ip);
     const p = await pending(req);
+    const choice = parse(
+      z.strictObject({ trustDevice: z.boolean().default(false) }),
+      req.body ?? {},
+    );
     const device = await transaction(async (c) => {
       const result = await c.query(
         "UPDATE device_challenges SET status='consumed' WHERE id=$1 AND token_hash=$2 AND status='approved' AND expires_at>now() RETURNING user_id,label",
@@ -149,7 +164,9 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       );
       if (!result.rows[0])
         throw failure(409, "Approval unavailable or already used.");
-      return (req.body as {trustDevice?:boolean})?.trustDevice===true ? trust(c, result.rows[0].user_id, result.rows[0].label) : undefined;
+      return choice.trustDevice
+        ? trust(c, result.rows[0].user_id, result.rows[0].label)
+        : undefined;
     });
     await issue(req, reply, p.user_id, device?.id, device?.raw, p.auth_epoch);
     return { ok: true };
@@ -162,11 +179,11 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       [user.id],
     );
     const pendingRequests = await pool.query(
-      "SELECT id,label,ip,created_at,expires_at FROM device_challenges WHERE user_id=$1 AND status='pending' AND expires_at>now() ORDER BY created_at DESC LIMIT 20",
+      "SELECT id,label,created_at,expires_at FROM device_challenges WHERE user_id=$1 AND status='pending' AND expires_at>now() ORDER BY created_at DESC LIMIT 20",
       [user.id],
     );
     const events = await pool.query(
-      "SELECT event,created_at,ip FROM security_events WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",
+      "SELECT event,created_at FROM security_events WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",
       [user.id],
     );
     return {
@@ -273,13 +290,33 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
     await limit("resendVerification", p.user_id);
     if (p.status !== "pending")
       throw failure(409, "Request no longer pending.");
-    await transaction(async c=>{
-      const user=(await c.query("SELECT email,email_verified_at,recovery_email,recovery_verified_at FROM users WHERE id=$1 FOR UPDATE",[p.user_id])).rows[0];
-      if(!user || (!user.email_verified_at && !user.recovery_verified_at)) throw failure(403,"Use a passkey, saved recovery code, or trusted device. Email recovery requires a verified address.");
-      const raw=randomBytes(32).toString("base64url");
-      const changed=await c.query("UPDATE device_challenges SET recovery_hash=$2 WHERE id=$1 AND status='pending' AND expires_at>now() RETURNING id",[p.id,hashToken(raw)]);
-      if(!changed.rowCount)throw failure(409,"Request expired.");
-      await deliverDevOrLogEmail({userId:p.user_id,to:user.email_verified_at?user.email:user.recovery_email,subject:"Approve your Chix browser",body:`Only continue if you started this sign-in. Open in the requesting browser: ${config.WEBAUTHN_ORIGIN}/#/device?token=${raw}`},c);
+    await transaction(async (c) => {
+      const user = (
+        await c.query(
+          "SELECT email,email_verified_at,recovery_email,recovery_verified_at FROM users WHERE id=$1 FOR UPDATE",
+          [p.user_id],
+        )
+      ).rows[0];
+      if (!user || (!user.email_verified_at && !user.recovery_verified_at))
+        throw failure(
+          403,
+          "Use a passkey, saved recovery code, or trusted device. Email recovery requires a verified address.",
+        );
+      const raw = randomBytes(32).toString("base64url");
+      const changed = await c.query(
+        "UPDATE device_challenges SET recovery_hash=$2 WHERE id=$1 AND status='pending' AND expires_at>now() RETURNING id",
+        [p.id, hashToken(raw)],
+      );
+      if (!changed.rowCount) throw failure(409, "Request expired.");
+      await deliverDevOrLogEmail(
+        {
+          userId: p.user_id,
+          to: user.email_verified_at ? user.email : user.recovery_email,
+          subject: "Approve your Chix browser",
+          body: `Only continue if you started this sign-in. Open in the requesting browser: ${config.WEBAUTHN_ORIGIN}/#/device?token=${raw}`,
+        },
+        c,
+      );
     });
     return { ok: true };
   });

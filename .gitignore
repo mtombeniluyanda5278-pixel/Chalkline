@@ -20,3 +20,9 @@ mail/
 *.key
 *.p12
 *.pfx
+
+# Generated local-only credentials (never publish).
+.local/
+coverage/
+.DS_Store
+.npmrc

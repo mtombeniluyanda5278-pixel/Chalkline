@@ -15,5 +15,8 @@ export function itemId(req: FastifyRequest) {
 }
 export async function limit(name: keyof typeof buckets, identity: string) {
   const result = await consumeRateLimit(name, identity);
-  if (!result.allowed) throw Object.assign(failure(429, "Too many requests. Try again later."), { retryAfter: result.retryAfterSec });
+  if (!result.allowed)
+    throw Object.assign(failure(429, "Too many requests. Try again later."), {
+      retryAfter: result.retryAfterSec,
+    });
 }

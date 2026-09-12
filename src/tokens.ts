@@ -5,8 +5,8 @@ import { config } from './config.js';
 import { failure } from './http.js';
 export type Purpose = 'verify_email'|'reset_password'|'verify_recovery'|'change_email'|'account_discovery';
 const policy = {
- verify_email: {minutes:1440, route:'verify-email'}, reset_password:{minutes:15, route:'reset-password'},
- verify_recovery:{minutes:30,route:'verify-recovery'},change_email:{minutes:30,route:'change-email'},account_discovery:{minutes:15,route:'discover-account'}
+ verify_email: {minutes:config.TOKEN_VERIFY_EMAIL_MINUTES, route:'verify-email'}, reset_password:{minutes:config.TOKEN_PASSWORD_RESET_MINUTES, route:'reset-password'},
+ verify_recovery:{minutes:config.TOKEN_VERIFY_RECOVERY_MINUTES,route:'verify-recovery'},change_email:{minutes:config.TOKEN_CHANGE_EMAIL_MINUTES,route:'change-email'},account_discovery:{minutes:config.TOKEN_ACCOUNT_DISCOVERY_MINUTES,route:'discover-account'}
 } as const;
 const digest=(raw:string)=>createHash('sha256').update(raw).digest();
 // Caller holds the user lock. Rotation and encrypted delivery always share its transaction.
@@ -27,6 +27,6 @@ export async function consumeEmailToken(c: PoolClient,raw:string,purpose:Purpose
  if(!token) throw failure(400,'Invalid or expired link.');
  // Throwing rolls consumption back alongside the protected action.
  if(purpose==='verify_email' && String(user.email).toLowerCase()!==String(token.target_email).toLowerCase()) throw failure(400,'Invalid or expired link.');
- if(purpose==='reset_password' && String(token.channel==='primary'?user.email:user.recovery_email).toLowerCase()!==String(token.target_email).toLowerCase()) throw failure(400,'Invalid or expired link.');
+ if(purpose==='reset_password' && (String(token.channel==='primary'?user.email:user.recovery_email).toLowerCase()!==String(token.target_email).toLowerCase() || (token.channel==='recovery' && !user.recovery_verified_at))) throw failure(400,'Invalid or expired link.');
  return {token,user};
 }

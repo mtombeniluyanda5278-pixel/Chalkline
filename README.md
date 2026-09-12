@@ -17,46 +17,32 @@ A portable teacher workspace: a static JavaScript frontend, Fastify / Node / Typ
 
 PDF and Office content opens through forced download into the user's document reader. Chalkline remembers a manually saved page/description bookmark; it cannot observe the cursor or page inside an external application. Raster images and UTF-8 text can be viewed inside Chalkline. Native notes/lesson plans are editable application documents, separate from uploads.
 
-## Install, configure, migrate, build, test, run
+## Local development
 
-Use Node 24 LTS and npm. `package.json` and `package-lock.json` now belong in source control.
-
-```sh
-npm ci
-cp .env.example .env
-```
-
-Fill the blank variables in `.env` using the guide in [Deployment](docs/DEPLOYMENT.md). The example deliberately contains names and blank values only. Do not overwrite an existing `.env`.
-
-For a **new empty database**:
+Use Node 24 LTS, npm, and Docker. After `npm ci`, the normal workflow is:
 
 ```sh
-npm run migrate
-npm run build
-npm run test:unit
-npm run test:integration
+docker compose up -d
 npm run dev
 ```
 
-For an **existing database** that already has migrations 001–005 applied but no migration ledger, first verify that history, back up the database, then run:
+Open **http://127.0.0.1:3000**. Fastify serves both the frontend and `/v1/*`; no preview server is needed. Use this exact origin for local passkeys.
+
+Compose generates random credentials in ignored `.local/` files and uses separate `chix-local` volumes and loopback ports 55434/56380, preserving historical databases. `npm run dev` applies the migration ledger and provisions restricted `chalkline_app` and `chalkline_test_app` roles before startup. Runtime roles cannot create schema, grant privileges, bypass RLS, or connect to the other database. Local RLS policies permit the backend's existing owner-authorized queries; they do not implement per-user database identity. Keep `.local/` with its matching volumes; it contains private credentials. Do not delete volumes to troubleshoot setup.
+
+The local runner does not read or modify your real `.env`. Development registration CAPTCHA is explicitly disabled; local test CAPTCHA uses the mock provider. Production validation still forbids mock providers and requires configured CAPTCHA when registration protection is enabled.
 
 ```sh
-npm run migrate -- --baseline=005
+npm test
+npm run test:unit
+npm run test:integration
+npm run build
+npm run format:check
 ```
 
-Baseline records existing migrations without replaying them and applies newer migrations. Do not use it on an empty or partly migrated database. Never edit old numbered migrations. Migration checksums and an advisory lock prevent changed/repeated/concurrent applications.
+`npm test` uses the dedicated generated local test database and Redis DB 15, without `.env.test` overrides. File-provider tests skip when local storage is absent. `npm run test:integration` provisions temporary PostgreSQL, Redis, and MinIO containers with generated credentials and tmpfs data, applies migrations, runs all API tests, and stops those containers; it does not remove persistent Docker volumes. Tests clean up their own users and test rate-limit keys, not whole databases. Neither test command uses your application `.env`.
 
-`npm run test:integration` starts isolated Docker containers with generated credentials, applies all migrations, tests the migration ledger twice, runs the existing and new API tests, and removes its containers. It does not use your application database. Docker/Colima must be running and able to pull the pinned test images.
-
-`npm test` runs the API tests using `.env.test`. That configuration **must use a dedicated disposable database and Redis database 15**; tests clear Redis counters and delete their own generated users. Use the isolated runner when in doubt.
-
-In a second terminal:
-
-```sh
-npm run preview
-```
-
-Open `http://localhost:8080`. Set `WEBAUTHN_ORIGIN` to that exact origin and `WEBAUTHN_RP_ID` to `localhost` for this local flow. The preview server proxies `/v1/*` to port 3000 and serves only explicitly public files. `npm run dev` runs the backend; it does not serve the frontend.
+For production configuration, use the blank names in `.env.example` and the existing deployment guide. Never overwrite an existing `.env`. Apply migrations with a privileged migration connection; runtime credentials should not own schema. Existing databases without a migration ledger still require an explicitly verified `--baseline=NNN`; local startup does not guess a baseline or replay old migrations.
 
 Production backend:
 

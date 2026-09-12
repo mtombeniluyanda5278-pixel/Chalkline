@@ -1,6 +1,6 @@
-import {registerPreferenceRoutes} from "./preferences.js";
-import {registerAdminRoutes} from "./admin.js";
-import {configurePlans} from "./quota.js";
+import { registerFrontend } from "./frontend.js";
+import { registerPreferenceRoutes } from "./preferences.js";
+import { registerAdminRoutes } from "./admin.js";
 import { registerRecoveryRoutes } from "./recovery.js";
 import { registerDocumentRoutes } from "./documents.js";
 import { registerResourceRoutes } from "./resources.js";
@@ -16,7 +16,6 @@ import { registerWebAuthnRoutes } from "./webauthn.js";
 import { clientIp, consumeRateLimit, redis } from "./rateLimit.js";
 
 export async function buildApp() {
-  await configurePlans();
   const app = Fastify({
     trustProxy: config.TRUST_PROXY,
     bodyLimit: 1_048_576,
@@ -90,7 +89,11 @@ export async function buildApp() {
     }
   });
   app.setErrorHandler((err: unknown, req, reply) => {
-    if(err && typeof err === "object" && "code" in err && err.code==="P0001") return reply.code(413).send({error:"Document quota reached. Purge unused documents or reduce content."});
+    if (err && typeof err === "object" && "code" in err && err.code === "P0001")
+      return reply.code(413).send({
+        error:
+          "Document quota reached. Purge unused documents or reduce content.",
+      });
     const statusCode =
       typeof err === "object" &&
       err &&
@@ -98,7 +101,8 @@ export async function buildApp() {
       typeof err.statusCode === "number"
         ? err.statusCode
         : 500;
-    if (err && typeof err === "object" && "retryAfter" in err) reply.header("Retry-After", String(err.retryAfter));
+    if (err && typeof err === "object" && "retryAfter" in err)
+      reply.header("Retry-After", String(err.retryAfter));
     const status = statusCode >= 400 && statusCode < 600 ? statusCode : 500;
     if (status >= 500)
       req.log.error(
@@ -111,7 +115,15 @@ export async function buildApp() {
         : "Request failed.";
 
     const message = status >= 500 ? "Something went wrong." : clientMessage;
-    void reply.code(status).send({ error: message, ...(err && typeof err === "object" && "code" in err && err.code === "CAPTCHA_REQUIRED" ? {code:err.code}: {}) });
+    void reply.code(status).send({
+      error: message,
+      ...(err &&
+      typeof err === "object" &&
+      "code" in err &&
+      err.code === "CAPTCHA_REQUIRED"
+        ? { code: err.code }
+        : {}),
+    });
   });
 
   app.get("/health", async () => ({ ok: true }));
@@ -121,7 +133,10 @@ export async function buildApp() {
       await pool.query("SELECT 1");
       await redis.ping();
 
-      return { ok: true, uploadsEnabled:config.MALWARE_SCANNER_MODE!=="disabled" };
+      return {
+        ok: true,
+        uploadsEnabled: config.MALWARE_SCANNER_MODE !== "disabled",
+      };
     } catch (err) {
       req.log.error("Readiness dependency check failed");
 
@@ -140,5 +155,6 @@ export async function buildApp() {
   await registerDocumentRoutes(app);
   await registerResourceRoutes(app);
   await registerDeviceRoutes(app);
+  await registerFrontend(app);
   return app;
 }

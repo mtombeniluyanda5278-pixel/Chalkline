@@ -50,7 +50,7 @@ try {
   const pg = await start(
     "postgres",
     "postgres:16-alpine",
-    ["-p", "127.0.0.1::5432"],
+    ["-p", "127.0.0.1::5432", "--tmpfs", "/var/lib/postgresql/data"],
     {
       POSTGRES_PASSWORD: password,
       POSTGRES_USER: "test_runner",
@@ -60,16 +60,19 @@ try {
   const redis = await start("redis", "redis:7-alpine", [
     "-p",
     "127.0.0.1::6379",
+    "--tmpfs",
+    "/data",
   ]);
   const storage = await start(
     "storage",
     "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z",
-    ["-p", "127.0.0.1::9000"],
+    ["-p", "127.0.0.1::9000", "--tmpfs", "/data"],
     { MINIO_ROOT_USER: "test_runner", MINIO_ROOT_PASSWORD: password },
   );
   const env = {
     ...process.env,
     NODE_ENV: "test",
+    CHIX_ISOLATED_TEST: "true",
     DATABASE_URL: `postgresql://test_runner:${password}@127.0.0.1:${port(pg)}/chalkline_test`,
     REDIS_URL: `redis://:${password}@127.0.0.1:${port(redis)}/15`,
     OUTBOX_ENCRYPTION_KEY: randomBytes(32).toString("hex"),

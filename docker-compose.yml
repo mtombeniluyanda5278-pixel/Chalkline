@@ -1,60 +1,48 @@
+# Local development only. Separate volumes/ports preserve historical databases.
+name: chix-local
 services:
+  setup:
+    image: node:24-alpine
+    command: ["node", "/scripts/local-config.mjs", "/config"]
+    volumes:
+      - ./scripts/local-config.mjs:/scripts/local-config.mjs:ro
+      - ./.local:/config
   postgres:
     image: postgres:16-alpine
-    command:
-      - postgres
-      - -c
-      - hba_file=/etc/chalkline/pg_hba.conf
-    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: chix_local_owner
+      POSTGRES_DB: chalkline
+      POSTGRES_PASSWORD_FILE: /config/owner-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
     ports:
-      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:55434:5432"
     volumes:
-      - chalkline_postgres:/var/lib/postgresql/data
-      - ./sql:/docker-entrypoint-initdb.d:ro
-      - ./postgres:/etc/chalkline:ro
+      - local_postgres:/var/lib/postgresql/data
+      - ./.local:/config:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-    networks:
-      - chalkline_internal
-
+      test: ["CMD-SHELL", "pg_isready -U chix_local_owner -d chalkline"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   redis:
     image: redis:7-alpine
-    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
     command:
       [
-        "redis-server",
-        "--appendonly",
-        "yes",
-        "--requirepass",
-        "${REDIS_PASSWORD}"
+        "sh",
+        "-c",
+        'exec redis-server --appendonly yes --requirepass "$$(cat /config/redis-password)"',
       ]
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
     ports:
-      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:56380:6379"
     volumes:
-      - chalkline_redis:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 5s
-    networks:
-      - chalkline_internal
-
-networks:
-  chalkline_internal:
-    driver: bridge
-
+      - local_redis:/data
+      - ./.local:/config:ro
 volumes:
-  chalkline_postgres:
-  chalkline_redis:
+  local_postgres:
+  local_redis:

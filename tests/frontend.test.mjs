@@ -55,8 +55,9 @@ test("public homepage renders during API outage, share is accessible, and unknow
   assert.match(document.querySelector("h1").textContent, /good teaching/);
   assert.equal(location.hash, "");
   const share = [...document.querySelectorAll("button")].find((b) =>
-    b.textContent.includes("Share Chalkline"),
+    b.textContent.includes("Share Chix"),
   );
+  assert.ok(share, "homepage exposes the Chix share button");
   share.click();
   await tick();
   assert.equal(share.getAttribute("aria-expanded"), "true");

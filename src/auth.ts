@@ -1,6 +1,9 @@
+import { randomInt } from "node:crypto";
+import { z } from "zod";
+import { setTimeout as delay } from "node:timers/promises";
 import { config } from "./config.js";
 import { issueEmailToken, consumeEmailToken } from "./tokens.js";
-import { verifyBot, loginProtection, failedLogin } from "./bot.js";
+import { verifyBot, loginProtection, failedLogin, recoveryProtection } from "./bot.js";
 import { completeSignIn } from "./devices.js";
 import { securityEvent } from "./security.js";
 import { authLink } from "./mail.js";
@@ -14,7 +17,6 @@ import {
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { buckets, clientIp, consumeRateLimit } from "./rateLimit.js";
 import {
-  SESSION_COOKIE,
   hashToken,
   clearSessionCookie,
   createOneTimeToken,
@@ -25,8 +27,10 @@ import {
   destroySessionById,
   listSessions,
   markSessionReauthenticated,
+  lockSessionUser,
   readSessionUser,
   setSessionCookie,
+  sessionTokens,
   type SessionUser,
 } from "./sessions.js";
 
@@ -126,6 +130,11 @@ export async function requireRecentAuth(
   return true;
 }
 
+const registrationResponse = {
+  ok:true, verificationRequired:true,
+  message:"Check your email to continue. If you already have an account, sign in or use account recovery.",
+};
+
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post("/v1/auth/register", async (req, reply) => {
     const ip = clientIp(req);
@@ -138,7 +147,15 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: "Invalid input.", details: parsed.error.flatten() });
     }
     const body = parsed.data;
-    if (config.BOT_REQUIRE_REGISTRATION) await verifyBot(body.captchaToken, "register");
+    if (config.BOT_REQUIRE_REGISTRATION)
+      await verifyBot(body.captchaToken, "register");
+    // Both fresh and conflicting registrations pay the password-hash cost.
+    // A shared response floor with jitter also covers ordinary transaction variance.
+    const respondAt = performance.now() + 400 + randomInt(101);
+    const finishRegistration = async () => {
+      await delay(Math.max(0, respondAt - performance.now()));
+      return reply.code(201).send(registrationResponse);
+    };
     const passwordHash = await hashPassword(body.password);
 
     const client = await pool.connect();
@@ -168,40 +185,42 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       );
       const userRow = userInsert.rows[0]!;
       const userId = userRow.id;
-      if (body.address) await client.query(
-        `INSERT INTO addresses (user_id, line1, line2, city, region, postal_code, country)
+      if (body.address)
+        await client.query(
+          `INSERT INTO addresses (user_id, line1, line2, city, region, postal_code, country)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [
-          userId,
-          body.address.line1,
-          body.address.line2 ?? null,
-          body.address.city,
-          body.address.region ?? null,
-          body.address.postalCode,
-          body.address.country,
-        ],
+          [
+            userId,
+            body.address.line1,
+            body.address.line2 ?? null,
+            body.address.city,
+            body.address.region ?? null,
+            body.address.postalCode,
+            body.address.country,
+          ],
+        );
+      await client.query(
+        "UPDATE users SET session_days=$2,timezone=$3,registration_pending=true,registration_trust_device=$4 WHERE id=$1",
+        [userId, config.SESSION_DEFAULT_DAYS, body.timezone, body.trustDevice],
       );
-      await client.query("UPDATE users SET session_days=$2,timezone=$3 WHERE id=$1", [userId,config.SESSION_DEFAULT_DAYS,body.timezone]);
-      await issueEmailToken(client,userId,"verify_email",body.email);
-      await client.query("INSERT INTO security_events(user_id,event) VALUES($1,'account_created')",[userId]);
-      await sendAdminAccountCreatedNotification({userId,createdAt:userRow.created_at},client);
+      await issueEmailToken(client, userId, "verify_email", body.email);
+      await client.query(
+        "INSERT INTO security_events(user_id,event) VALUES($1,'account_created')",
+        [userId],
+      );
+      await sendAdminAccountCreatedNotification(
+        { userId, createdAt: userRow.created_at },
+        client,
+      );
       await client.query("COMMIT");
       transactionCommitted = true;
 
-      await completeSignIn(req, reply, userId, "registration");
-      return reply.code(201).send({
-        user: {
-          id: userId,
-          email: body.email,
-          username: body.username,
-          firstName: body.firstName,
-          lastName: body.lastName,
-          country: body.country,
-          emailVerified: false,
-          phoneVerified: false,
-        },
-      });
+      return await finishRegistration();
     } catch (err: unknown) {
+      if (transactionCommitted) {
+        req.log.warn({requestId:req.id}, "Account committed; registration finalization interrupted");
+        return await finishRegistration();
+      }
       if (!transactionCommitted) {
         await client.query("ROLLBACK");
       }
@@ -210,9 +229,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           ? String((err as { code: string }).code)
           : "";
       if (code === "23505") {
-        return reply.code(409).send({
-          error: "An account with that email or username already exists.",
-        });
+        req.log.info(
+          { requestId: req.id, code: "REGISTRATION_UNAVAILABLE" },
+          "Registration conflict",
+        );
+        return await finishRegistration();
       }
       req.log.error("Account operation failed");
       return reply.code(500).send({ error: "Could not create account." });
@@ -227,13 +248,13 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.code(400).send({ error: "Invalid input." });
     }
-    if (!(await rateLimitOr429(reply, "login", ip)))
-      return;
+    if (!(await rateLimitOr429(reply, "login", ip))) return;
 
-    await loginProtection(parsed.data.email,ip,parsed.data.captchaToken);
+    await loginProtection(parsed.data.email, ip, parsed.data.captchaToken);
     const found = await pool.query<{
       id: string;
       auth_epoch: number;
+      registration_pending: boolean;
       password_hash: string | null;
       locked_until: Date | null;
       email: string;
@@ -244,7 +265,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       email_verified_at: Date | null;
       phone_verified_at: Date | null;
     }>(
-      `SELECT id, auth_epoch, password_hash, locked_until, email, username, first_name, last_name, country,
+      `SELECT id, auth_epoch, registration_pending, password_hash, locked_until, email, username, first_name, last_name, country,
               email_verified_at, phone_verified_at
          FROM users WHERE email = $1 AND suspended_at IS NULL`,
       [parsed.data.email],
@@ -260,16 +281,17 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const hash = user?.password_hash ?? DUMMY_ARGON2;
     const passwordOk = await verifyPassword(hash, parsed.data.password);
 
-    if (!user || !user.password_hash || !passwordOk) {
-      await failedLogin(parsed.data.email,ip);
-      if(user) await securityEvent(user.id,"login_failed",ip);
-      return reply.code(401).send({error:"Invalid email or password."});
+    if (!user || !user.password_hash || !passwordOk || user.registration_pending) {
+      await failedLogin(parsed.data.email, ip);
+      if (user) await securityEvent(user.id, "login_failed", ip);
+      return reply.code(401).send({ error: "Invalid email or password." });
     }
     const approval = await completeSignIn(
       req,
       reply,
       user.id,
       "password",
+      parsed.data.trustDevice,
       user.auth_epoch,
     );
     if (approval) return reply.code(202).send(approval);
@@ -292,15 +314,19 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       !(await verifyPassword(row.password_hash, body.password))
     )
       return reply.code(401).send({ error: "Current password is incorrect." });
-    await markSessionReauthenticated(user.sessionId);
+    await transaction(async c => {
+      const current=await lockSessionUser(c,user);
+      if(current.password_hash!==row.password_hash) throw Object.assign(new Error("Credentials changed. Try again."),{statusCode:409});
+      await c.query("UPDATE sessions SET reauthenticated_at=now(),auth_method='password' WHERE id=$1",[user.sessionId]);
+    });
     return { ok: true };
   });
 
   app.post("/v1/auth/logout", async (req, reply) => {
     const actor = await readSessionUser(req);
     if (actor) await securityEvent(actor.id, "logout", req.ip);
-    const raw = req.cookies[SESSION_COOKIE];
-    if (raw) await destroySession(raw);
+    const [raw, ...duplicates] = sessionTokens(req);
+    if (raw) await destroySession(raw, ...duplicates);
     clearSessionCookie(reply);
     return { ok: true };
   });
@@ -384,13 +410,24 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       return { ok: true, unchanged: true };
     }
 
-    await transaction(async c => {
-      const current=(await c.query("SELECT email,password_hash FROM users WHERE id=$1 FOR UPDATE",[sessionUser.id])).rows[0];
-      if(current.email!==row.email || current.password_hash!==row.password_hash) throw Object.assign(new Error("Credentials changed. Try again."),{statusCode:409});
-      await issueEmailToken(c,sessionUser.id,"change_email",email);
-      await securityEvent(sessionUser.id,"email_change_requested",req.ip,c);
+    await transaction(async (c) => {
+      const current = (
+        await c.query(
+          "SELECT email,password_hash FROM users WHERE id=$1 FOR UPDATE",
+          [sessionUser.id],
+        )
+      ).rows[0];
+      if (
+        current.email !== row.email ||
+        current.password_hash !== row.password_hash
+      )
+        throw Object.assign(new Error("Credentials changed. Try again."), {
+          statusCode: 409,
+        });
+      await issueEmailToken(c, sessionUser.id, "change_email", email);
+      await securityEvent(sessionUser.id, "email_change_requested", req.ip, c);
     });
-    return {ok:true,emailVerificationRequired:true};
+    return { ok: true, emailVerificationRequired: true };
   });
 
   app.patch("/v1/me", async (req, reply) => {
@@ -601,8 +638,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    if (!(await requireRecentAuth(sessionUser, reply))) return;
-    if (await verifyPassword(hash,body.newPassword)) return reply.code(400).send({error:"Choose a different new password."});
+    // The current password was just verified; an older timestamp is irrelevant.
+    if (await verifyPassword(hash, body.newPassword))
+      return reply
+        .code(400)
+        .send({ error: "Choose a different new password." });
 
     const newHash = await hashPassword(body.newPassword);
     const changed = await transaction(async (c) => {
@@ -620,7 +660,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         "DELETE FROM email_tokens WHERE user_id=$1 AND purpose='reset_password'",
         [sessionUser.id],
       );
-      await securityEvent(sessionUser.id, "password_changed", req.ip,c);
+      await securityEvent(sessionUser.id, "password_changed", req.ip, c);
       return r.rows[0];
     });
     if (!changed)
@@ -655,7 +695,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
         reauthenticatedAt: s.reauthenticatedAt,
-        ip: s.ip,
         userAgent: s.userAgent,
         isCurrent: s.id === sessionUser.sessionId,
       })),
@@ -712,7 +751,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!sessionUser) return;
 
     if (!(await rateLimitOr429(reply, "accountDelete", sessionUser.id))) return;
-    if (!(await requireRecentAuth(sessionUser, reply))) return;
 
     const found = await pool.query<{ password_hash: string | null }>(
       `SELECT password_hash FROM users WHERE id = $1`,
@@ -742,14 +780,33 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           error: "Current password is incorrect.",
         });
       }
-    }
+    } else if (!(await requireRecentAuth(sessionUser, reply))) return;
 
-    await transaction(async c => {
-      const owner=(await c.query("SELECT email,password_hash FROM users WHERE id=$1 FOR UPDATE",[sessionUser.id])).rows[0];
-      if(!owner || owner.password_hash!==row.password_hash) throw Object.assign(new Error("Credentials changed. Try again."),{statusCode:409});
-      await deliverDevOrLogEmail({to:owner.email,subject:"Your Chix account was deleted",body:`Account deletion completed at ${new Date().toISOString()}.`},c,`account-deleted:${sessionUser.id}`);
-      await c.query("UPDATE notification_outbox SET expires_at=now()+interval '30 days' WHERE dedupe_key=$1",[`account-deleted:${sessionUser.id}`]);
-      await c.query("DELETE FROM users WHERE id=$1",[sessionUser.id]);
+    await transaction(async (c) => {
+      const owner = (
+        await c.query(
+          "SELECT email,password_hash FROM users WHERE id=$1 FOR UPDATE",
+          [sessionUser.id],
+        )
+      ).rows[0];
+      if (!owner || owner.password_hash !== row.password_hash)
+        throw Object.assign(new Error("Credentials changed. Try again."), {
+          statusCode: 409,
+        });
+      await deliverDevOrLogEmail(
+        {
+          to: owner.email,
+          subject: "Your Chix account was deleted",
+          body: `Account deletion completed at ${new Date().toISOString()}.`,
+        },
+        c,
+        `account-deleted:${sessionUser.id}`,
+      );
+      await c.query(
+        "UPDATE notification_outbox SET expires_at=now()+interval '30 days' WHERE dedupe_key=$1",
+        [`account-deleted:${sessionUser.id}`],
+      );
+      await c.query("DELETE FROM users WHERE id=$1", [sessionUser.id]);
     });
     clearSessionCookie(reply);
 
@@ -768,21 +825,38 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
     const { token } = parsed.data;
 
-    await transaction(async c => {
-      const {user}=await consumeEmailToken(c,parsed.data.token,"verify_email");
-      await c.query("UPDATE users SET email_verified_at=now(),updated_at=now() WHERE id=$1",[user.id]);
-      await securityEvent(user.id,"email_verified",req.ip,c);
+    const registration = await transaction(async (c) => {
+      const { user } = await consumeEmailToken(
+        c,
+        parsed.data.token,
+        "verify_email",
+      );
+      await c.query(
+        "UPDATE users SET email_verified_at=now(),registration_pending=false,registration_trust_device=false,updated_at=now() WHERE id=$1",
+        [user.id],
+      );
+      await securityEvent(user.id, "email_verified", req.ip, c);
+      return user.registration_pending ? user : null;
     });
-    return {ok:true};
+    if (registration) {
+      try {
+        await completeSignIn(req,reply,registration.id,"registration",registration.registration_trust_device,registration.auth_epoch);
+      } catch {
+        req.log.warn({requestId:req.id},"Email verified; first sign-in bootstrap failed");
+        clearSessionCookie(reply);
+        return {ok:true,signInRequired:true,message:"Your email is verified. Sign in to continue."};
+      }
+    }
+    return { ok: true };
   });
 
   app.post("/v1/auth/verify-email/resend", async (req, reply) => {
     const sessionUser = await requireUser(req, reply);
     if (!sessionUser) return;
 
-    if (!(await rateLimitOr429(reply, "resendVerification", sessionUser.id))) {
-      return;
-    }
+    const body = z.strictObject({captchaToken:z.string().max(4096).optional()}).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({error:"Invalid input."});
+    await recoveryProtection("verification_resend",sessionUser.id,req.ip,body.data.captchaToken);
 
     const found = await pool.query<{
       email: string;
@@ -807,24 +881,43 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       };
     }
 
-    if (!(await rateLimitOr429(reply,"recoveryIp",req.ip))) return;
-    await transaction(async c => {
-      const current=(await c.query("SELECT email FROM users WHERE id=$1 FOR UPDATE",[sessionUser.id])).rows[0];
-      await issueEmailToken(c,sessionUser.id,"verify_email",current.email);
+    await transaction(async (c) => {
+      const current = (
+        await c.query("SELECT email FROM users WHERE id=$1 FOR UPDATE", [
+          sessionUser.id,
+        ])
+      ).rows[0];
+      await issueEmailToken(c, sessionUser.id, "verify_email", current.email);
     });
-    return {ok:true};
+    return { ok: true };
   });
 
-  app.post("/v1/auth/password-reset/request", async (req,reply) => {
-    const parsed=PasswordResetRequestInput.safeParse(req.body);
-    if(!parsed.success) return reply.code(400).send({error:"Invalid input."});
-    const {email,captchaToken}=parsed.data;
-    if(!(await rateLimitOr429(reply,"recoveryIp",req.ip)) || !(await rateLimitOr429(reply,"passwordReset",email))) return;
-    await transaction(async c => {
-      const users=(await c.query("SELECT * FROM users WHERE (email=$1 OR (recovery_email=$1 AND recovery_verified_at IS NOT NULL)) AND suspended_at IS NULL ORDER BY id LIMIT 5 FOR UPDATE",[email])).rows;
-      for(const user of users) await issueEmailToken(c,user.id,"reset_password",email,user.email.toLowerCase()===email?"primary":"recovery");
+  app.post("/v1/auth/password-reset/request", async (req, reply) => {
+    const parsed = PasswordResetRequestInput.safeParse(req.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: "Invalid input." });
+    const { email, captchaToken } = parsed.data;
+    await recoveryProtection("password_reset", email, req.ip, captchaToken);
+    await transaction(async (c) => {
+      const users = (
+        await c.query(
+          "SELECT * FROM users WHERE (email=$1 OR (recovery_email=$1 AND recovery_verified_at IS NOT NULL)) AND suspended_at IS NULL ORDER BY id LIMIT 5 FOR UPDATE",
+          [email],
+        )
+      ).rows;
+      for (const user of users)
+        await issueEmailToken(
+          c,
+          user.id,
+          "reset_password",
+          email,
+          user.email.toLowerCase() === email ? "primary" : "recovery",
+        );
     });
-    return {ok:true,message:"If an account matches, a recovery link will be sent."};
+    return {
+      ok: true,
+      message: "If an account matches, a recovery link will be sent.",
+    };
   });
 
   app.post("/v1/auth/password-reset/confirm", async (req, reply) => {
@@ -842,10 +935,20 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
     const passwordHash = await hashPassword(parsed.data.password);
     const reset = await transaction(async (client) => {
-      const {token,user}=await consumeEmailToken(client,parsed.data.token,"reset_password");
-      const userId=user.id;
-      await client.query("UPDATE users SET auth_epoch=auth_epoch+1,password_hash=$2,email_verified_at=CASE WHEN $3='primary' THEN coalesce(email_verified_at,now()) ELSE email_verified_at END,failed_login_count=0,locked_until=NULL,updated_at=now() WHERE id=$1",[userId,passwordHash,token.channel]);
-      await client.query("UPDATE email_tokens SET used_at=now() WHERE user_id=$1 AND purpose IN ('reset_password','change_email') AND used_at IS NULL",[userId]);
+      const { token, user } = await consumeEmailToken(
+        client,
+        parsed.data.token,
+        "reset_password",
+      );
+      const userId = user.id;
+      await client.query(
+        "UPDATE users SET auth_epoch=auth_epoch+1,password_hash=$2,email_verified_at=CASE WHEN $3='primary' THEN coalesce(email_verified_at,now()) ELSE email_verified_at END,failed_login_count=0,locked_until=NULL,updated_at=now() WHERE id=$1",
+        [userId, passwordHash, token.channel],
+      );
+      await client.query(
+        "UPDATE email_tokens SET used_at=now() WHERE user_id=$1 AND purpose IN ('reset_password','change_email') AND used_at IS NULL",
+        [userId],
+      );
       await client.query("DELETE FROM sessions WHERE user_id=$1", [userId]);
       await client.query(
         "UPDATE trusted_devices SET revoked_at=now() WHERE user_id=$1",

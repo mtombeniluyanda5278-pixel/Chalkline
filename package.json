@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node scripts/dev.mjs",
     "start": "node dist/index.js",
     "build": "tsc && node scripts/build-static.mjs",
-    "test": "NODE_ENV=test DOTENV_CONFIG_PATH=.env.test tsx --test --test-concurrency=1 src/**/*.test.ts",
+    "test": "node scripts/test.mjs",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "migrate": "node scripts/migrate.mjs",

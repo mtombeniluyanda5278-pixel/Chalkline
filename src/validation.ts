@@ -16,7 +16,10 @@ const RESERVED_USERNAMES = new Set([
 ]);
 
 function yearsAgo(date: Date, timezone: string): number {
-  const now = new Date(new Date().toLocaleDateString("en-CA",{timeZone:timezone})+"T00:00:00Z");
+  const now = new Date(
+    new Date().toLocaleDateString("en-CA", { timeZone: timezone }) +
+      "T00:00:00Z",
+  );
   let age = now.getUTCFullYear() - date.getUTCFullYear();
   const m = now.getUTCMonth() - date.getUTCMonth();
   if (m < 0 || (m === 0 && now.getUTCDate() < date.getUTCDate())) age -= 1;
@@ -57,9 +60,21 @@ export const RegisterInput = z
     phone: z
       .string()
       .trim()
-      .regex(/^\+[1-9]\d{7,14}$/, "Use E.164, e.g. +27111234567").optional(),
+      .regex(/^\+[1-9]\d{7,14}$/, "Use E.164, e.g. +27111234567")
+      .optional(),
     address: AddressInput.optional(),
-    timezone: z.string().max(100).default("Africa/Johannesburg").refine(v=>{try {new Intl.DateTimeFormat("en",{timeZone:v});return true;}catch{return false;}}),
+    timezone: z
+      .string()
+      .max(100)
+      .default("Africa/Johannesburg")
+      .refine((v) => {
+        try {
+          new Intl.DateTimeFormat("en", { timeZone: v });
+          return true;
+        } catch {
+          return false;
+        }
+      }),
     captchaToken: z.string().max(4096).optional(),
     trustDevice: z.boolean().default(false),
     marketingAnnouncements: z.boolean().default(false),
@@ -84,7 +99,7 @@ export const RegisterInput = z
     if (
       Number.isNaN(dob.getTime()) ||
       dob.toISOString().slice(0, 10) !== data.dateOfBirth ||
-      yearsAgo(dob,data.timezone) < config.MIN_ACCOUNT_AGE_YEARS
+      yearsAgo(dob, data.timezone) < config.MIN_ACCOUNT_AGE_YEARS
     ) {
       ctx.addIssue({
         code: "custom",

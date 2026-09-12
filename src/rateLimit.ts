@@ -2,8 +2,10 @@ import { createHmac, randomBytes } from "node:crypto";
 import { Redis } from "ioredis";
 import { config } from "./config.js";
 
-const identitySecret = config.RATE_LIMIT_KEY_SECRET ?? randomBytes(32).toString("hex");
-export const opaqueIdentity = (identity: string) => createHmac("sha256",identitySecret).update(identity).digest("hex");
+const identitySecret =
+  config.RATE_LIMIT_KEY_SECRET ?? randomBytes(32).toString("hex");
+export const opaqueIdentity = (identity: string) =>
+  createHmac("sha256", identitySecret).update(identity).digest("hex");
 type Bucket = { max: number; windowMs: number };
 
 export const redis = new Redis(config.REDIS_URL, {
@@ -12,10 +14,16 @@ export const redis = new Redis(config.REDIS_URL, {
   enableReadyCheck: true,
 });
 
-export const buckets = {
+const defaults = {
   login: { max: 30, windowMs: 15 * 60 * 1000 },
   signup: { max: 5, windowMs: 60 * 60 * 1000 },
   passwordReset: { max: 3, windowMs: 60 * 60 * 1000 },
+  passwordResetIp: { max: 10, windowMs: 60 * 60 * 1000 },
+  accountDiscovery: { max: 3, windowMs: 60 * 60 * 1000 },
+  accountDiscoveryIp: { max: 10, windowMs: 60 * 60 * 1000 },
+  resendVerificationIp: { max: 10, windowMs: 60 * 60 * 1000 },
+  deviceRecovery: { max: 3, windowMs: 60 * 60 * 1000 },
+  deviceRecoveryIp: { max: 10, windowMs: 60 * 60 * 1000 },
   passwordChange: { max: 5, windowMs: 15 * 60 * 1000 },
   resendVerification: { max: 3, windowMs: 60 * 60 * 1000 },
   accountDelete: { max: 3, windowMs: 60 * 60 * 1000 },
@@ -28,11 +36,27 @@ export const buckets = {
   workspaceWrite: { max: 60, windowMs: 60 * 1000 },
   deviceChallenge: { max: 5, windowMs: 15 * 60 * 1000 },
   deviceApproval: { max: 10, windowMs: 15 * 60 * 1000 },
+  deviceApprovalIp: { max: 30, windowMs: 15 * 60 * 1000 },
   search: { max: 60, windowMs: 60 * 1000 },
   feedback: { max: 5, windowMs: 60 * 60 * 1000 },
   recoveryIp: { max: 10, windowMs: 60 * 60 * 1000 },
   global: { max: 120, windowMs: 60 * 1000 },
 } as const satisfies Record<string, Bucket>;
+
+export const buckets: {
+  -readonly [K in keyof typeof defaults]: Bucket;
+} = { ...defaults };
+
+const policyOverrides: Record<string, Bucket> =
+  config.RATE_LIMIT_POLICY_JSON ?? {};
+
+for (const [name, policy] of Object.entries(policyOverrides)) {
+  if (!(name in defaults)) {
+    throw new Error(`Unknown rate limit bucket: ${name}`);
+  }
+
+  buckets[name as keyof typeof defaults] = policy;
+}
 
 export async function connectRedis(): Promise<void> {
   if (redis.status === "ready") {
@@ -56,7 +80,14 @@ export async function clearTestRateLimits(): Promise<void> {
   if (config.NODE_ENV !== "test") {
     throw new Error("clearTestRateLimits() is only available in test mode.");
   }
-  await redis.flushdb();
+  for (const pattern of ["rl:*", "fail:*", "risk:*"]) {
+    let cursor = "0";
+    do {
+      const result = await redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
+      cursor = result[0];
+      if (result[1].length) await redis.del(...result[1]);
+    } while (cursor !== "0");
+  }
 }
 
 export async function consumeRateLimit(
