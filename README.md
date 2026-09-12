@@ -1,140 +1,96 @@
+> **Work-in-progress checkpoint:** Chix hardening pass 2 is incomplete and not ready to deploy or claim review-ready. See [unfinished work and test results](docs/HARDENING-PASS-2.md).
+
 # Chalkline
 
-Server-first account API: Apple-style registration fields, Argon2id passwords, httpOnly sessions, rate limits, forgot-password tokens, and WebAuthn passkeys.
+A portable teacher workspace: a static JavaScript frontend, Fastify / Node / TypeScript API, PostgreSQL, Redis, and private S3-compatible storage. Browser requests stay on the frontend origin through `/v1/*`.
 
-This is an **API**, not a website. There is no HTML UI in this pass.
+## What is included
 
-This implementation **mitigates** credential stuffing (rate limits + lockout), password-dump reuse (Argon2id), session theft via `localStorage` (httpOnly cookies), mass assignment on profile update (allowlisted fields), and SQL injection (parameterized queries) **assuming** you configure Postgres, Redis (production), TLS, and email as below. It does **not** give you SMS verification, CAPTCHA, production email, or a pentest.
+- Public homepage with accessible sharing and reduced-motion support.
+- Dashboard, files, notes, lesson plans, reusable templates, schedule, account/security, and trusted devices.
+- PostgreSQL resume state for document cursor/selection/scroll/active field and file reading bookmarks.
+- Debounced autosave, serialized writes, optimistic revisions, the latest 50 prior versions, visible failures, draft download, and save-as-copy conflict recovery.
+- Private file uploads with byte limits, per-user quotas, MIME/signature checks, Office archive inspection, owner-authorized downloads, text/image previews, and lesson attachments.
+- Existing password, Argon2id, email verification, password reset, WebAuthn, session revocation, Redis limits, and recent-auth checks, extended with device approval and recovery.
+- Provider-independent encrypted email outbox and security-event history.
+- Durable object deletion queue, including exact-key object versions and delete markers.
 
----
+PDF and Office content opens through forced download into the user's document reader. Chalkline remembers a manually saved page/description bookmark; it cannot observe the cursor or page inside an external application. Raster images and UTF-8 text can be viewed inside Chalkline. Native notes/lesson plans are editable application documents, separate from uploads.
 
-## A. What is in application code
+## Install, configure, migrate, build, test, run
 
-- `POST /v1/auth/register` — first/last name, country, DOB, email, password, username, phone (E.164), address, marketing consents
-- `POST /v1/auth/login` / `logout`
-- `GET|PATCH /v1/me` — ownership via session; PATCH cannot set `role` / `is_admin`
-- Email verify + password reset token consume (tokens hashed at rest)
-- Passkey register (must already be signed in) + passkey login
-- Helmet security headers
-- Generic 500s to clients; details only in logs (cookies redacted)
+Use Node 24 LTS and npm. `package.json` and `package-lock.json` now belong in source control.
 
-## B. What you must configure (code cannot do this)
-
-| Need | Why |
-|---|---|
-| Docker Desktop (or local Postgres + Redis) | Database and rate-limit store |
-| `SESSION_SECRET` | Session cookie integrity is not enough; we store session hashes in DB. Secret is still required by config for future signed values — generate with `openssl rand -hex 32` |
-| Redis in production | In-memory limits do not work across multiple Node processes |
-| Email (Postmark, SES, Resend) | Real verify/reset mail. Dev writes `mail/dev-outbox.txt` |
-| HTTPS + domain | Passkeys in production; `COOKIE_SECURE=true` |
-| `WEBAUTHN_RP_ID` and `WEBAUTHN_ORIGIN` | Must match the site users open |
-| SMS provider | Phone is **stored**, not verified, until you add Twilio (or similar) |
-| CAPTCHA keys | Not wired yet |
-| Billing caps | On SMS/email/host accounts in their dashboards |
-| 2FA on GitHub, domain, host, email | Protects *your* admin accounts |
-
-## C. Local setup
-
-1. Install Docker Desktop and start it.
-2. From this directory:
-
-```bash
+```sh
+npm ci
 cp .env.example .env
-openssl rand -hex 32   # paste into SESSION_SECRET in .env
-npm install
-docker compose up -d
-npm test
+```
+
+Fill the blank variables in `.env` using the guide in [Deployment](docs/DEPLOYMENT.md). The example deliberately contains names and blank values only. Do not overwrite an existing `.env`.
+
+For a **new empty database**:
+
+```sh
+npm run migrate
+npm run build
+npm run test:unit
+npm run test:integration
 npm run dev
 ```
 
-3. Postgres runs `sql/001_init.sql` **only on first empty volume**. If you change SQL after the first start: `docker compose down -v && docker compose up -d`.
-4. `curl -s http://localhost:3000/health`
+For an **existing database** that already has migrations 001–005 applied but no migration ledger, first verify that history, back up the database, then run:
 
-Register (JSON, not a form):
-
-```bash
-curl -s -c cookies.txt -H 'Content-Type: application/json' -d '{
-  "firstName": "Ada",
-  "lastName": "Lovelace",
-  "country": "ZA",
-  "dateOfBirth": "1990-01-15",
-  "email": "ada@example.com",
-  "password": "correct horse battery",
-  "confirmPassword": "correct horse battery",
-  "username": "ada.l",
-  "phone": "+27821234567",
-  "address": {
-    "line1": "1 Loop St",
-    "city": "Cape Town",
-    "postalCode": "8001",
-    "country": "ZA"
-  },
-  "marketingAnnouncements": false,
-  "marketingApps": false
-}' http://localhost:3000/v1/auth/register
+```sh
+npm run migrate -- --baseline=005
 ```
 
-Dev verification token: `mail/dev-outbox.txt`.
+Baseline records existing migrations without replaying them and applies newer migrations. Do not use it on an empty or partly migrated database. Never edit old numbered migrations. Migration checksums and an advisory lock prevent changed/repeated/concurrent applications.
 
-Passkeys: call register options **while logged in**, then use the browser WebAuthn API. `localhost` works over HTTP; a real domain needs HTTPS.
+`npm run test:integration` starts isolated Docker containers with generated credentials, applies all migrations, tests the migration ledger twice, runs the existing and new API tests, and removes its containers. It does not use your application database. Docker/Colima must be running and able to pull the pinned test images.
 
-### Headers (what Helmet set)
+`npm test` runs the API tests using `.env.test`. That configuration **must use a dedicated disposable database and Redis database 15**; tests clear Redis counters and delete their own generated users. Use the isolated runner when in doubt.
 
-| Header | Role |
-|---|---|
-| Content-Security-Policy | Limits where scripts/frames can load if you later add HTML |
-| X-Frame-Options / frame-ancestors | Reduces clickjacking |
-| X-Content-Type-Options | `nosniff` |
-| Strict-Transport-Security | Only in `NODE_ENV=production` |
+In a second terminal:
 
-HTTPS redirect is **your host/reverse proxy** (Caddy, nginx, Cloudflare), not this Node process.
+```sh
+npm run preview
+```
 
-### Row-level security
+Open `http://localhost:8080`. Set `WEBAUTHN_ORIGIN` to that exact origin and `WEBAUTHN_RP_ID` to `localhost` for this local flow. The preview server proxies `/v1/*` to port 3000 and serves only explicitly public files. `npm run dev` runs the backend; it does not serve the frontend.
 
-RLS is **enabled** on tables. The Docker user `chalkline` **owns** the tables, so it **bypasses** RLS. App-level `WHERE user_id = $1` is what actually isolates users today. To make RLS real: create a non-owner role, `FORCE ROW LEVEL SECURITY`, and `SET LOCAL app.user_id` per request. Ask for that pass when you want it.
+Production backend:
 
-### Rate limits
+```sh
+npm run build
+npm start
+```
 
-| Route family | Limit |
-|---|---|
-| Global | 120 / minute / IP |
-| Login | 5 / 15 min / IP+email |
-| Signup | 5 / hour / IP |
-| Password reset request | 3 / hour / IP |
-| Passkeys | 10 / minute |
+Production static output is **`public-build/` only**. Do not publish the repository root or backend `dist/`. The Vercel configuration preserves the current API rewrite and publishes only the explicit public allowlist. Other static hosts can serve the same directory and reverse-proxy `/v1/*`.
 
-Production **fails closed** if Redis is missing. Local without Redis uses memory and logs that this is not multi-process safe.
+Additional checks:
 
----
+```sh
+npm run format:check
+npm audit
+```
 
-## Remaining attack surface
+There is no ESLint configuration; formatting is checked by Prettier. Tests do not certify a live provider deployment, browser authenticator, email deliverability, or load capacity.
 
-- No CAPTCHA on signup
-- Phone not verified (SIM-swap recovery would be unsafe if you treated it as proof)
-- Passkey challenges for registration live in process memory (use Redis before multiple app servers)
-- No CSRF tokens yet (`SameSite=Lax` cookies; add CSRF if you add a browser form on another site)
-- No object storage / file uploads
-- No pentest
+## Project guide
 
----
+- `app.js`: established authentication/account forms and route shell.
+- `workspace.js`, `autosave.js`: workspace screens and autosave state machine.
+- `src/documents.ts`: notes, lessons, templates, revisions, attachments, resume, dashboard.
+- `src/resources.ts`, `src/fileValidation.ts`, `src/storage.ts`: resource authorization, uploads, validation, S3 abstraction.
+- `src/devices.ts`, `src/security.ts`: trust, number matching, recovery, security events.
+- `src/mail.ts`, `src/worker.ts`: encrypted notification queue, delivery adapter, retention, storage cleanup.
+- `sql/006_workspace.sql`, `007_devices_notifications.sql`, `008_auth_race_guards.sql`: additive migrations.
+- `scripts/`: migration runner, static build/preview, isolated integration runner.
+- [Deployment and operations](docs/DEPLOYMENT.md).
+- [Security audit and verification](docs/SECURITY-AUDIT.md).
 
-## Checklists
+## Autosave behavior
 
-### Implementation
-- [x] Code for register/login/session/reset/passkeys
-- [ ] Email provider in production
-- [ ] Redis in production
-- [ ] Secrets in `.env` (not git)
-- [x] Database schema in `sql/001_init.sql`
-- [x] Password hash test
-- [ ] Negative tests for IDOR / rate limit (next pass)
-- [ ] Confirm 429 on burst login
-- [ ] Confirm `/v1/me` 401 without cookie
-- [ ] Confirm production does not send stack traces
+A browser serializes its own saves. PostgreSQL accepts a change only if its revision matches; competing tabs receive HTTP 409. A failed draft remains on screen. Retry resends with the same revision, so an ambiguous network failure becomes a conflict instead of an overwrite. Save-as-copy preserves a competing draft in a new document. Download draft exports unsaved content for recovery.
 
-### You do
-1. Generate `SESSION_SECRET`
-2. `docker compose up -d`
-3. Pick email provider before any real user
-4. Set domain + TLS + WebAuthn RP ID before passkeys in prod
-5. Turn on 2FA on hosting/DNS/email
+Navigation waits for saving. If saving fails, leaving requires an explicit discard confirmation. Browser unload prompts are best effort: forced process termination, device failure, or closing a mobile browser can lose edits that have not reached the server. This is not an offline editor, and no browser storage is treated as the source of truth.

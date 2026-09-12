@@ -1,203 +1,217 @@
+import {setupExtras,mountBot,humanProof,renderPreferences,renderOnboarding,renderRecoveryLink,renderDiscovery,renderFeedback,renderTrash,renderAdmin} from "./extras.js";
+import {
+  setupWorkspace,
+  beforeLeave,
+  hasUnsaved,
+  renderHome,
+  renderDashboard,
+  renderDocuments,
+  renderEditor,
+  renderFiles,
+  renderFile,
+  renderDeviceApproval,
+  renderDevices,
+} from "./workspace.js";
 const COUNTRIES = [
-  ['AF', 'Afghanistan'],
-  ['AL', 'Albania'],
-  ['DZ', 'Algeria'],
-  ['AD', 'Andorra'],
-  ['AO', 'Angola'],
-  ['AG', 'Antigua and Barbuda'],
-  ['AR', 'Argentina'],
-  ['AM', 'Armenia'],
-  ['AU', 'Australia'],
-  ['AT', 'Austria'],
-  ['AZ', 'Azerbaijan'],
-  ['BS', 'Bahamas'],
-  ['BH', 'Bahrain'],
-  ['BD', 'Bangladesh'],
-  ['BB', 'Barbados'],
-  ['BY', 'Belarus'],
-  ['BE', 'Belgium'],
-  ['BZ', 'Belize'],
-  ['BJ', 'Benin'],
-  ['BT', 'Bhutan'],
-  ['BO', 'Bolivia'],
-  ['BA', 'Bosnia and Herzegovina'],
-  ['BW', 'Botswana'],
-  ['BR', 'Brazil'],
-  ['BN', 'Brunei'],
-  ['BG', 'Bulgaria'],
-  ['BF', 'Burkina Faso'],
-  ['BI', 'Burundi'],
-  ['CV', 'Cabo Verde'],
-  ['KH', 'Cambodia'],
-  ['CM', 'Cameroon'],
-  ['CA', 'Canada'],
-  ['CF', 'Central African Republic'],
-  ['TD', 'Chad'],
-  ['CL', 'Chile'],
-  ['CN', 'China'],
-  ['CO', 'Colombia'],
-  ['KM', 'Comoros'],
-  ['CG', 'Congo'],
-  ['CD', 'Congo (DRC)'],
-  ['CR', 'Costa Rica'],
-  ['CI', "Cote d'Ivoire"],
-  ['HR', 'Croatia'],
-  ['CU', 'Cuba'],
-  ['CY', 'Cyprus'],
-  ['CZ', 'Czechia'],
-  ['DK', 'Denmark'],
-  ['DJ', 'Djibouti'],
-  ['DM', 'Dominica'],
-  ['DO', 'Dominican Republic'],
-  ['EC', 'Ecuador'],
-  ['EG', 'Egypt'],
-  ['SV', 'El Salvador'],
-  ['GQ', 'Equatorial Guinea'],
-  ['ER', 'Eritrea'],
-  ['EE', 'Estonia'],
-  ['SZ', 'Eswatini'],
-  ['ET', 'Ethiopia'],
-  ['FJ', 'Fiji'],
-  ['FI', 'Finland'],
-  ['FR', 'France'],
-  ['GA', 'Gabon'],
-  ['GM', 'Gambia'],
-  ['GE', 'Georgia'],
-  ['DE', 'Germany'],
-  ['GH', 'Ghana'],
-  ['GR', 'Greece'],
-  ['GD', 'Grenada'],
-  ['GT', 'Guatemala'],
-  ['GN', 'Guinea'],
-  ['GW', 'Guinea-Bissau'],
-  ['GY', 'Guyana'],
-  ['HT', 'Haiti'],
-  ['HN', 'Honduras'],
-  ['HU', 'Hungary'],
-  ['IS', 'Iceland'],
-  ['IN', 'India'],
-  ['ID', 'Indonesia'],
-  ['IR', 'Iran'],
-  ['IQ', 'Iraq'],
-  ['IE', 'Ireland'],
-  ['IL', 'Israel'],
-  ['IT', 'Italy'],
-  ['JM', 'Jamaica'],
-  ['JP', 'Japan'],
-  ['JO', 'Jordan'],
-  ['KZ', 'Kazakhstan'],
-  ['KE', 'Kenya'],
-  ['KI', 'Kiribati'],
-  ['KW', 'Kuwait'],
-  ['KG', 'Kyrgyzstan'],
-  ['LA', 'Laos'],
-  ['LV', 'Latvia'],
-  ['LB', 'Lebanon'],
-  ['LS', 'Lesotho'],
-  ['LR', 'Liberia'],
-  ['LY', 'Libya'],
-  ['LI', 'Liechtenstein'],
-  ['LT', 'Lithuania'],
-  ['LU', 'Luxembourg'],
-  ['MG', 'Madagascar'],
-  ['MW', 'Malawi'],
-  ['MY', 'Malaysia'],
-  ['MV', 'Maldives'],
-  ['ML', 'Mali'],
-  ['MT', 'Malta'],
-  ['MH', 'Marshall Islands'],
-  ['MR', 'Mauritania'],
-  ['MU', 'Mauritius'],
-  ['MX', 'Mexico'],
-  ['FM', 'Micronesia'],
-  ['MD', 'Moldova'],
-  ['MC', 'Monaco'],
-  ['MN', 'Mongolia'],
-  ['ME', 'Montenegro'],
-  ['MA', 'Morocco'],
-  ['MZ', 'Mozambique'],
-  ['MM', 'Myanmar'],
-  ['NA', 'Namibia'],
-  ['NR', 'Nauru'],
-  ['NP', 'Nepal'],
-  ['NL', 'Netherlands'],
-  ['NZ', 'New Zealand'],
-  ['NI', 'Nicaragua'],
-  ['NE', 'Niger'],
-  ['NG', 'Nigeria'],
-  ['KP', 'North Korea'],
-  ['MK', 'North Macedonia'],
-  ['NO', 'Norway'],
-  ['OM', 'Oman'],
-  ['PK', 'Pakistan'],
-  ['PW', 'Palau'],
-  ['PA', 'Panama'],
-  ['PG', 'Papua New Guinea'],
-  ['PY', 'Paraguay'],
-  ['PE', 'Peru'],
-  ['PH', 'Philippines'],
-  ['PL', 'Poland'],
-  ['PT', 'Portugal'],
-  ['QA', 'Qatar'],
-  ['RO', 'Romania'],
-  ['RU', 'Russia'],
-  ['RW', 'Rwanda'],
-  ['KN', 'Saint Kitts and Nevis'],
-  ['LC', 'Saint Lucia'],
-  ['VC', 'Saint Vincent and the Grenadines'],
-  ['WS', 'Samoa'],
-  ['SM', 'San Marino'],
-  ['ST', 'Sao Tome and Principe'],
-  ['SA', 'Saudi Arabia'],
-  ['SN', 'Senegal'],
-  ['RS', 'Serbia'],
-  ['SC', 'Seychelles'],
-  ['SL', 'Sierra Leone'],
-  ['SG', 'Singapore'],
-  ['SK', 'Slovakia'],
-  ['SI', 'Slovenia'],
-  ['SB', 'Solomon Islands'],
-  ['SO', 'Somalia'],
-  ['ZA', 'South Africa'],
-  ['KR', 'South Korea'],
-  ['SS', 'South Sudan'],
-  ['ES', 'Spain'],
-  ['LK', 'Sri Lanka'],
-  ['SD', 'Sudan'],
-  ['SR', 'Suriname'],
-  ['SE', 'Sweden'],
-  ['CH', 'Switzerland'],
-  ['SY', 'Syria'],
-  ['TW', 'Taiwan'],
-  ['TJ', 'Tajikistan'],
-  ['TZ', 'Tanzania'],
-  ['TH', 'Thailand'],
-  ['TL', 'Timor-Leste'],
-  ['TG', 'Togo'],
-  ['TO', 'Tonga'],
-  ['TT', 'Trinidad and Tobago'],
-  ['TN', 'Tunisia'],
-  ['TR', 'Turkiye'],
-  ['TM', 'Turkmenistan'],
-  ['TV', 'Tuvalu'],
-  ['UG', 'Uganda'],
-  ['UA', 'Ukraine'],
-  ['AE', 'United Arab Emirates'],
-  ['GB', 'United Kingdom'],
-  ['US', 'United States'],
-  ['UY', 'Uruguay'],
-  ['UZ', 'Uzbekistan'],
-  ['VU', 'Vanuatu'],
-  ['VA', 'Vatican City'],
-  ['VE', 'Venezuela'],
-  ['VN', 'Vietnam'],
-  ['YE', 'Yemen'],
-  ['ZM', 'Zambia'],
-  ['ZW', 'Zimbabwe'],
+  ["AF", "Afghanistan"],
+  ["AL", "Albania"],
+  ["DZ", "Algeria"],
+  ["AD", "Andorra"],
+  ["AO", "Angola"],
+  ["AG", "Antigua and Barbuda"],
+  ["AR", "Argentina"],
+  ["AM", "Armenia"],
+  ["AU", "Australia"],
+  ["AT", "Austria"],
+  ["AZ", "Azerbaijan"],
+  ["BS", "Bahamas"],
+  ["BH", "Bahrain"],
+  ["BD", "Bangladesh"],
+  ["BB", "Barbados"],
+  ["BY", "Belarus"],
+  ["BE", "Belgium"],
+  ["BZ", "Belize"],
+  ["BJ", "Benin"],
+  ["BT", "Bhutan"],
+  ["BO", "Bolivia"],
+  ["BA", "Bosnia and Herzegovina"],
+  ["BW", "Botswana"],
+  ["BR", "Brazil"],
+  ["BN", "Brunei"],
+  ["BG", "Bulgaria"],
+  ["BF", "Burkina Faso"],
+  ["BI", "Burundi"],
+  ["CV", "Cabo Verde"],
+  ["KH", "Cambodia"],
+  ["CM", "Cameroon"],
+  ["CA", "Canada"],
+  ["CF", "Central African Republic"],
+  ["TD", "Chad"],
+  ["CL", "Chile"],
+  ["CN", "China"],
+  ["CO", "Colombia"],
+  ["KM", "Comoros"],
+  ["CG", "Congo"],
+  ["CD", "Congo (DRC)"],
+  ["CR", "Costa Rica"],
+  ["CI", "Cote d'Ivoire"],
+  ["HR", "Croatia"],
+  ["CU", "Cuba"],
+  ["CY", "Cyprus"],
+  ["CZ", "Czechia"],
+  ["DK", "Denmark"],
+  ["DJ", "Djibouti"],
+  ["DM", "Dominica"],
+  ["DO", "Dominican Republic"],
+  ["EC", "Ecuador"],
+  ["EG", "Egypt"],
+  ["SV", "El Salvador"],
+  ["GQ", "Equatorial Guinea"],
+  ["ER", "Eritrea"],
+  ["EE", "Estonia"],
+  ["SZ", "Eswatini"],
+  ["ET", "Ethiopia"],
+  ["FJ", "Fiji"],
+  ["FI", "Finland"],
+  ["FR", "France"],
+  ["GA", "Gabon"],
+  ["GM", "Gambia"],
+  ["GE", "Georgia"],
+  ["DE", "Germany"],
+  ["GH", "Ghana"],
+  ["GR", "Greece"],
+  ["GD", "Grenada"],
+  ["GT", "Guatemala"],
+  ["GN", "Guinea"],
+  ["GW", "Guinea-Bissau"],
+  ["GY", "Guyana"],
+  ["HT", "Haiti"],
+  ["HN", "Honduras"],
+  ["HU", "Hungary"],
+  ["IS", "Iceland"],
+  ["IN", "India"],
+  ["ID", "Indonesia"],
+  ["IR", "Iran"],
+  ["IQ", "Iraq"],
+  ["IE", "Ireland"],
+  ["IL", "Israel"],
+  ["IT", "Italy"],
+  ["JM", "Jamaica"],
+  ["JP", "Japan"],
+  ["JO", "Jordan"],
+  ["KZ", "Kazakhstan"],
+  ["KE", "Kenya"],
+  ["KI", "Kiribati"],
+  ["KW", "Kuwait"],
+  ["KG", "Kyrgyzstan"],
+  ["LA", "Laos"],
+  ["LV", "Latvia"],
+  ["LB", "Lebanon"],
+  ["LS", "Lesotho"],
+  ["LR", "Liberia"],
+  ["LY", "Libya"],
+  ["LI", "Liechtenstein"],
+  ["LT", "Lithuania"],
+  ["LU", "Luxembourg"],
+  ["MG", "Madagascar"],
+  ["MW", "Malawi"],
+  ["MY", "Malaysia"],
+  ["MV", "Maldives"],
+  ["ML", "Mali"],
+  ["MT", "Malta"],
+  ["MH", "Marshall Islands"],
+  ["MR", "Mauritania"],
+  ["MU", "Mauritius"],
+  ["MX", "Mexico"],
+  ["FM", "Micronesia"],
+  ["MD", "Moldova"],
+  ["MC", "Monaco"],
+  ["MN", "Mongolia"],
+  ["ME", "Montenegro"],
+  ["MA", "Morocco"],
+  ["MZ", "Mozambique"],
+  ["MM", "Myanmar"],
+  ["NA", "Namibia"],
+  ["NR", "Nauru"],
+  ["NP", "Nepal"],
+  ["NL", "Netherlands"],
+  ["NZ", "New Zealand"],
+  ["NI", "Nicaragua"],
+  ["NE", "Niger"],
+  ["NG", "Nigeria"],
+  ["KP", "North Korea"],
+  ["MK", "North Macedonia"],
+  ["NO", "Norway"],
+  ["OM", "Oman"],
+  ["PK", "Pakistan"],
+  ["PW", "Palau"],
+  ["PA", "Panama"],
+  ["PG", "Papua New Guinea"],
+  ["PY", "Paraguay"],
+  ["PE", "Peru"],
+  ["PH", "Philippines"],
+  ["PL", "Poland"],
+  ["PT", "Portugal"],
+  ["QA", "Qatar"],
+  ["RO", "Romania"],
+  ["RU", "Russia"],
+  ["RW", "Rwanda"],
+  ["KN", "Saint Kitts and Nevis"],
+  ["LC", "Saint Lucia"],
+  ["VC", "Saint Vincent and the Grenadines"],
+  ["WS", "Samoa"],
+  ["SM", "San Marino"],
+  ["ST", "Sao Tome and Principe"],
+  ["SA", "Saudi Arabia"],
+  ["SN", "Senegal"],
+  ["RS", "Serbia"],
+  ["SC", "Seychelles"],
+  ["SL", "Sierra Leone"],
+  ["SG", "Singapore"],
+  ["SK", "Slovakia"],
+  ["SI", "Slovenia"],
+  ["SB", "Solomon Islands"],
+  ["SO", "Somalia"],
+  ["ZA", "South Africa"],
+  ["KR", "South Korea"],
+  ["SS", "South Sudan"],
+  ["ES", "Spain"],
+  ["LK", "Sri Lanka"],
+  ["SD", "Sudan"],
+  ["SR", "Suriname"],
+  ["SE", "Sweden"],
+  ["CH", "Switzerland"],
+  ["SY", "Syria"],
+  ["TW", "Taiwan"],
+  ["TJ", "Tajikistan"],
+  ["TZ", "Tanzania"],
+  ["TH", "Thailand"],
+  ["TL", "Timor-Leste"],
+  ["TG", "Togo"],
+  ["TO", "Tonga"],
+  ["TT", "Trinidad and Tobago"],
+  ["TN", "Tunisia"],
+  ["TR", "Turkiye"],
+  ["TM", "Turkmenistan"],
+  ["TV", "Tuvalu"],
+  ["UG", "Uganda"],
+  ["UA", "Ukraine"],
+  ["AE", "United Arab Emirates"],
+  ["GB", "United Kingdom"],
+  ["US", "United States"],
+  ["UY", "Uruguay"],
+  ["UZ", "Uzbekistan"],
+  ["VU", "Vanuatu"],
+  ["VA", "Vatican City"],
+  ["VE", "Venezuela"],
+  ["VN", "Vietnam"],
+  ["YE", "Yemen"],
+  ["ZM", "Zambia"],
+  ["ZW", "Zimbabwe"],
 ];
 
 /* ==========================================================================
-   Chalkline — frontend logic
+   Chix — frontend logic
    Same-origin app: API_BASE is intentionally empty. `/v1/*` is reverse
    proxied to the backend at deployment. Do not point this at another origin.
    ========================================================================== */
@@ -225,10 +239,17 @@ function el(tag, attrs, children) {
       node.setAttribute(key, String(value));
     }
   }
-  const kids = children === undefined ? [] : Array.isArray(children) ? children : [children];
+  const kids =
+    children === undefined
+      ? []
+      : Array.isArray(children)
+        ? children
+        : [children];
   for (const child of kids) {
     if (child === null || child === undefined || child === false) continue;
-    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    node.append(
+      child instanceof Node ? child : document.createTextNode(String(child)),
+    );
   }
   return node;
 }
@@ -281,7 +302,10 @@ async function apiFetch(path, options) {
   options = options || {};
   const res = await fetch(API_BASE + path, {
     method: options.method || "GET",
-    headers: Object.assign({ "Content-Type": "application/json" }, options.headers || {}),
+    headers: Object.assign(
+      { "Content-Type": "application/json" },
+      options.headers || {},
+    ),
     credentials: "same-origin",
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
@@ -297,7 +321,13 @@ async function apiFetch(path, options) {
   }
 
   if (!res.ok) {
-    const message = (data && data.error) || "Something went wrong. Please try again.";
+    if(data?.code==="CAPTCHA_REQUIRED" && !options.captchaRetried){
+      const action=path.includes("login")?"login":path.includes("register")?"register":path.includes("discovery")?"discovery":"reset";
+      const captchaToken=await humanProof(action);
+      return apiFetch(path,{...options,captchaRetried:true,body:{...options.body,captchaToken}});
+    }
+    const message =
+      (data && data.error) || "Something went wrong. Please try again.";
     throw new ApiError(
       message,
       res.status,
@@ -341,14 +371,24 @@ function field(config) {
       type: config.type || "text",
       autocomplete: config.autocomplete,
       required: config.required || undefined,
-      placeholder: config.placeholder,
+      placeholder: config.placeholder || " ",
     },
     config.extraAttrs || {},
   );
 
   const input =
     config.tag === "select"
-      ? el("select", Object.assign({ id: id, name: config.name || id, required: config.required || undefined }, config.extraAttrs || {}))
+      ? el(
+          "select",
+          Object.assign(
+            {
+              id: id,
+              name: config.name || id,
+              required: config.required || undefined,
+            },
+            config.extraAttrs || {},
+          ),
+        )
       : el("input", inputAttrs);
 
   const errorEl = el("p", { class: "field-error", id: errorId });
@@ -363,8 +403,16 @@ function field(config) {
   }
   wrapperChildren.push(errorEl);
 
-  const wrapperClass = config.checkbox ? "field checkbox-field" : "field";
-  const wrapper = el("div", { class: wrapperClass }, config.checkbox ? [input, label] : wrapperChildren);
+  const wrapperClass = config.checkbox
+    ? "field checkbox-field"
+    : config.tag === "select" || config.type === "date"
+      ? "field"
+      : "field floating-field";
+  const wrapper = el(
+    "div",
+    { class: wrapperClass },
+    config.checkbox ? [input, label] : wrapperChildren,
+  );
 
   return { wrapper: wrapper, input: input, errorEl: errorEl, id: id };
 }
@@ -432,7 +480,8 @@ function confirmDialog(opts) {
     errorEl.hidden = true;
     errorEl.textContent = "";
     clearNode(extraEl);
-    confirmBtn.className = "btn " + (opts.danger ? "btn--danger" : "btn--primary");
+    confirmBtn.className =
+      "btn " + (opts.danger ? "btn--danger" : "btn--primary");
     confirmBtn.textContent = opts.confirmLabel || "Confirm";
 
     let passwordInput = null;
@@ -462,7 +511,11 @@ function confirmDialog(opts) {
     }
     function onSubmit(e) {
       e.preventDefault();
-      if (opts.requirePassword && opts.passwordRequired !== false && !passwordInput.value) {
+      if (
+        opts.requirePassword &&
+        opts.passwordRequired !== false &&
+        !passwordInput.value
+      ) {
         errorEl.textContent = "Enter your password to continue.";
         errorEl.hidden = false;
         return;
@@ -489,16 +542,31 @@ function confirmDialog(opts) {
 async function reauthenticate() {
   const result = await confirmDialog({
     title: "Confirm it's you",
-    body: "For your security, please re-enter your password to continue.",
+    body: "Enter your password, or leave it blank to confirm with a passkey.",
     confirmLabel: "Continue",
     requirePassword: true,
     passwordLabel: "Password",
+    passwordRequired: false,
   });
   if (!result.confirmed) return false;
   try {
-    await apiFetch("/v1/auth/login", {
+    if (!result.password) {
+      const expectedUser = state.user.id;
+      await loginWithPasskey();
+      await loadSession();
+      if (state.user?.id !== expectedUser) {
+        navigate("/dashboard");
+        toast(
+          "A different account signed in. Please review it before continuing.",
+          "error",
+        );
+        return false;
+      }
+      return true;
+    }
+    await apiFetch("/v1/auth/reauth", {
       method: "POST",
-      body: { email: state.user.email, password: result.password },
+      body: { password: result.password },
     });
     return true;
   } catch (err) {
@@ -531,7 +599,9 @@ function webauthnSupported() {
 
 function base64urlToBuffer(base64url) {
   const padLength = (4 - (base64url.length % 4)) % 4;
-  const base64 = (base64url + "=".repeat(padLength)).replace(/-/g, "+").replace(/_/g, "/");
+  const base64 = (base64url + "=".repeat(padLength))
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
   const raw = atob(base64);
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
@@ -541,7 +611,8 @@ function base64urlToBuffer(base64url) {
 function bufferToBase64url(buffer) {
   const bytes = new Uint8Array(buffer);
   let str = "";
-  for (let i = 0; i < bytes.byteLength; i++) str += String.fromCharCode(bytes[i]);
+  for (let i = 0; i < bytes.byteLength; i++)
+    str += String.fromCharCode(bytes[i]);
   const base64 = btoa(str);
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
@@ -592,7 +663,8 @@ function authenticationCredentialToJSON(credential) {
       signature: bufferToBase64url(response.signature),
     },
   };
-  if (response.userHandle) body.response.userHandle = bufferToBase64url(response.userHandle);
+  if (response.userHandle)
+    body.response.userHandle = bufferToBase64url(response.userHandle);
   return body;
 }
 
@@ -613,11 +685,18 @@ async function registerPasskey(deviceName) {
   }
   if (!credential) throw new Error("Passkey setup was cancelled.");
   const body = registrationCredentialToJSON(credential, deviceName);
-  await withReauth(() => apiFetch("/v1/auth/passkeys/register/verify", { method: "POST", body: body }));
+  await withReauth(() =>
+    apiFetch("/v1/auth/passkeys/register/verify", {
+      method: "POST",
+      body: body,
+    }),
+  );
 }
 
 async function loginWithPasskey() {
-  const options = await apiFetch("/v1/auth/passkeys/login/options", { method: "POST" });
+  const options = await apiFetch("/v1/auth/passkeys/login/options", {
+    method: "POST",
+  });
   const publicKey = toRequestOptions(options);
   let assertion;
   try {
@@ -631,7 +710,10 @@ async function loginWithPasskey() {
   }
   if (!assertion) throw new Error("Passkey sign-in was cancelled.");
   const body = authenticationCredentialToJSON(assertion);
-  await apiFetch("/v1/auth/passkeys/login/verify", { method: "POST", body: body });
+  await apiFetch("/v1/auth/passkeys/login/verify", {
+    method: "POST",
+    body: body,
+  });
 }
 
 /* ---------------------------------------------------------------------- */
@@ -699,14 +781,11 @@ async function loadSession() {
     // Only treat an actual authentication failure as "logged out".
     // A server error, rate limit, or network failure should not
     // wipe the current client state.
-    if (
-      err instanceof ApiError &&
-      (err.status === 401 || err.status === 403)
-    ) {
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
       if (err.status === 401 || err.status === 403) {
-  state.user = null;
-  state.address = null;
-}
+        state.user = null;
+        state.address = null;
+      }
       return false;
     }
 
@@ -718,7 +797,12 @@ function renderNav() {
   clearNode(siteNav);
   if (state.user) {
     siteNav.append(
-      el("span", { class: "site-nav__greeting" }, "Signed in as " + state.user.username),
+      el(
+        "span",
+        { class: "site-nav__greeting" },
+        "Signed in as " + state.user.username,
+      ),
+      el("a", { href: "#/dashboard" }, "Workspace"),
       el("a", { href: "#/account" }, "Account"),
       el(
         "button",
@@ -739,25 +823,49 @@ function renderNav() {
 }
 
 async function handleSignOut() {
+  if (!(await beforeLeave(false))) return;
   try {
     await apiFetch("/v1/auth/logout", { method: "POST" });
   } catch (err) {
-    /* Even if this fails, clear local state so the UI reflects "signed out". */
+    toast(
+      "Sign-out failed. Your session is still active. Please retry.",
+      "error",
+    );
+    return;
   }
   state.user = null;
   state.address = null;
   renderNav();
-  navigate("/login");
+  navigate("/");
   toast("You've been signed out.");
 }
 
 const ROUTES = {
-  "/": { render: async () => navigate(state.user ? "/account" : "/login") },
+  "/": { render: renderHome },
+  "/dashboard": { authOnly: true, render: () => renderDashboard() },
+  "/notes": { authOnly: true, render: () => renderDocuments("note") },
+  "/lessons": { authOnly: true, render: () => renderDocuments("lesson") },
+  "/templates": { authOnly: true, render: () => renderDocuments("template") },
+  "/schedule": { authOnly: true, render: () => renderDashboard(true) },
+  "/editor": { authOnly: true, render: renderEditor },
+  "/files": { authOnly: true, render: renderFiles },
+  "/file": { authOnly: true, render: renderFile },
+  "/device": { render: renderDeviceApproval },
+  "/devices": { authOnly: true, render: renderDevices },
   "/login": { guestOnly: true, render: renderLogin },
   "/register": { guestOnly: true, render: renderRegister },
   "/forgot-password": { guestOnly: true, render: renderForgotPassword },
   "/reset-password": { guestOnly: true, render: renderResetPassword },
   "/verify-email": { render: renderVerifyEmail },
+  "/preferences": {authOnly:true,render:renderPreferences},
+  "/onboarding": {authOnly:true,render:renderOnboarding},
+  "/feedback": {authOnly:true,render:renderFeedback},
+  "/trash": {authOnly:true,render:renderTrash},
+  "/admin": {authOnly:true,render:renderAdmin},
+  "/forgot-email": {render:renderDiscovery},
+  "/verify-recovery": {render:renderRecoveryLink},
+  "/change-email": {render:renderRecoveryLink},
+  "/discover-account": {render:renderRecoveryLink},
   "/account": { authOnly: true, render: renderAccount },
 };
 
@@ -778,7 +886,18 @@ function navigate(path) {
   }
 }
 
-async function renderRoute() {
+let currentHash = location.hash || "#/";
+let rendering = Promise.resolve();
+function renderRoute() {
+  rendering = rendering.then(renderRouteNow, renderRouteNow);
+  return rendering;
+}
+async function renderRouteNow() {
+  if (!(await beforeLeave())) {
+    history.replaceState(null, "", currentHash);
+    return;
+  }
+  currentHash = location.hash || "#/";
   const parsed = parseHash();
   const route = ROUTES[parsed.path] || ROUTES["/"];
 
@@ -787,16 +906,49 @@ async function renderRoute() {
     return;
   }
   if (route.guestOnly && state.user) {
-    navigate("/account");
+    navigate("/dashboard");
     return;
   }
 
   renderNav();
   clearNode(viewRoot);
-
+  document.body.dataset.view =
+    parsed.path === "/" ? "home" : route.authOnly ? "workspace" : "auth";
+  if (route.authOnly) {
+    const tabs = [
+      ["/dashboard", "Home"],
+      ["/files", "Files"],
+      ["/notes", "Notes"],
+      ["/lessons", "Lesson plans"],
+      ["/templates", "Templates"],
+      ["/schedule", "Schedule"],
+      ["/account", "Account"],
+      ["/devices", "Devices"],
+    ];
+    viewRoot.append(
+      el(
+        "nav",
+        { class: "workspace-nav", "aria-label": "Workspace" },
+        tabs.map(([path, label]) =>
+          el(
+            "a",
+            {
+              href: "#" + path,
+              "aria-current": parsed.path === path ? "page" : undefined,
+            },
+            label,
+          ),
+        ),
+      ),
+    );
+  }
   try {
     await route.render(parsed.params);
   } catch (err) {
+    if (hasUnsaved()) {
+      toast(friendlyError(err), "error");
+      return;
+    }
     clearNode(viewRoot);
     viewRoot.append(
       el("div", { class: "page-head" }, [
@@ -807,7 +959,7 @@ async function renderRoute() {
   }
 
   const heading = viewRoot.querySelector("h1");
-  if (heading) {
+  if (heading && parsed.path !== "/editor") {
     heading.setAttribute("tabindex", "-1");
     heading.focus();
   }
@@ -815,10 +967,44 @@ async function renderRoute() {
 
 window.addEventListener("hashchange", renderRoute);
 
+setupExtras({el,apiFetch,viewRoot,state,navigate,toast,friendlyError,field,confirmDialog,withReauth});
+setupWorkspace({
+  el,
+  apiFetch,
+  viewRoot,
+  state,
+  navigate,
+  toast,
+  friendlyError,
+  field,
+  confirmDialog,
+  withReauth,
+  reauthenticate,
+  loadSession,
+  greetingForNow,
+  formatDateTime,
+  describeUserAgent,
+});
+window.addEventListener("beforeunload", (e) => {
+  if (hasUnsaved()) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 document.addEventListener("DOMContentLoaded", async () => {
-  await loadSession();
-  if (!location.hash) {
-    location.hash = state.user ? "/account" : "/login";
+  document.querySelector(".skip-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    const main = document.getElementById("main");
+    main.setAttribute("tabindex", "-1");
+    main.focus();
+  });
+  try {
+    await loadSession();
+  } catch {
+    toast(
+      "Account service unavailable. You can still explore Chix.",
+      "error",
+    );
   }
   await renderRoute();
 });
@@ -829,7 +1015,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 async function renderLogin() {
   const fields = {
-    email: field({ id: "login-email", label: "Email", type: "email", required: true, autocomplete: "email" }),
+    email: field({
+      id: "login-email",
+      label: "Email",
+      type: "email",
+      required: true,
+      autocomplete: "email",
+    }),
     password: field({
       id: "login-password",
       label: "Password",
@@ -842,13 +1034,20 @@ async function renderLogin() {
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
 
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary btn--full" }, "Sign in");
-
-  const form = el(
-    "form",
-    { class: "form", novalidate: true },
-    [errorBanner, fields.email.wrapper, fields.password.wrapper, submitBtn],
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary btn--full" },
+    "Sign in",
   );
+
+  const trust=el("input",{type:"checkbox"});
+  const form = el("form", { class: "form", novalidate: true }, [
+    errorBanner,
+    fields.email.wrapper,
+    fields.password.wrapper,
+    el("label",{},[trust,el("span",{},"Trust this device")]),
+    submitBtn,
+  ]);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -857,12 +1056,21 @@ async function renderLogin() {
     submitBtn.disabled = true;
     submitBtn.textContent = "Signing in…";
     try {
-      await apiFetch("/v1/auth/login", {
+      const loginResult = await apiFetch("/v1/auth/login", {
         method: "POST",
-        body: { email: fields.email.input.value.trim(), password: fields.password.input.value },
+        body: {
+          email: fields.email.input.value.trim(),
+          password: fields.password.input.value,
+          trustDevice:trust.checked,
+        },
       });
+      if (loginResult.approvalRequired) {
+        state.trustDevice=trust.checked;
+        navigate("/device");
+        return;
+      }
       await loadSession();
-      navigate("/account");
+      navigate("/dashboard");
       toast("Welcome back.", "success");
     } catch (err) {
       if (err instanceof ApiError && err.status === 400 && err.details) {
@@ -888,7 +1096,7 @@ async function renderLogin() {
       try {
         await loginWithPasskey();
         await loadSession();
-        navigate("/account");
+        navigate("/dashboard");
         toast("Welcome back.", "success");
       } catch (err) {
         toast(err.message || friendlyError(err), "error");
@@ -903,11 +1111,12 @@ async function renderLogin() {
     el("div", { class: "auth-shell" }, [
       el("div", { class: "page-head" }, [
         el("h1", {}, "Sign in"),
-        el("p", {}, "Welcome back to Chalkline."),
+        el("p", {}, "Welcome back to Chix."),
       ]),
       el("div", { class: "card" }, [form].concat(passkeyRow)),
       el("div", { class: "link-row" }, [
         el("a", { href: "#/forgot-password" }, "Forgot your password?"),
+        el("a",{href:"#/forgot-email"},"Forgot your email?"),
         el("a", { href: "#/register" }, "Create an account"),
       ]),
     ]),
@@ -920,8 +1129,18 @@ async function renderLogin() {
 
 async function renderRegister() {
   const fields = {
-    firstName: field({ id: "reg-first-name", label: "First name", required: true, autocomplete: "given-name" }),
-    lastName: field({ id: "reg-last-name", label: "Last name", required: true, autocomplete: "family-name" }),
+    firstName: field({
+      id: "reg-first-name",
+      label: "First name",
+      required: true,
+      autocomplete: "given-name",
+    }),
+    lastName: field({
+      id: "reg-last-name",
+      label: "Last name",
+      required: true,
+      autocomplete: "family-name",
+    }),
     country: field({
       id: "reg-country",
       label: "Country",
@@ -935,7 +1154,13 @@ async function renderRegister() {
       required: true,
       autocomplete: "bday",
     }),
-    email: field({ id: "reg-email", label: "Email", type: "email", required: true, autocomplete: "email" }),
+    email: field({
+      id: "reg-email",
+      label: "Email",
+      type: "email",
+      required: true,
+      autocomplete: "email",
+    }),
     username: field({
       id: "reg-username",
       label: "Username",
@@ -969,19 +1194,47 @@ async function renderRegister() {
       required: true,
       autocomplete: "new-password",
     }),
-    addressLine1: field({ id: "reg-address-line1", label: "Address line 1", required: true, autocomplete: "address-line1" }),
-    addressLine2: field({ id: "reg-address-line2", label: "Address line 2 (optional)", autocomplete: "address-line2" }),
-    addressCity: field({ id: "reg-address-city", label: "City", required: true, autocomplete: "address-level2" }),
-    addressRegion: field({ id: "reg-address-region", label: "State / region (optional)", autocomplete: "address-level1" }),
-    addressPostalCode: field({ id: "reg-address-postal", label: "Postal code", required: true, autocomplete: "postal-code" }),
-    addressCountry: field({ id: "reg-address-country", label: "Country", tag: "select", required: true }),
-        marketingAnnouncements: field({
+    addressLine1: field({
+      id: "reg-address-line1",
+      label: "Address line 1",
+      required: true,
+      autocomplete: "address-line1",
+    }),
+    addressLine2: field({
+      id: "reg-address-line2",
+      label: "Address line 2 (optional)",
+      autocomplete: "address-line2",
+    }),
+    addressCity: field({
+      id: "reg-address-city",
+      label: "City",
+      required: true,
+      autocomplete: "address-level2",
+    }),
+    addressRegion: field({
+      id: "reg-address-region",
+      label: "State / region (optional)",
+      autocomplete: "address-level1",
+    }),
+    addressPostalCode: field({
+      id: "reg-address-postal",
+      label: "Postal code",
+      required: true,
+      autocomplete: "postal-code",
+    }),
+    addressCountry: field({
+      id: "reg-address-country",
+      label: "Country",
+      tag: "select",
+      required: true,
+    }),
+    marketingAnnouncements: field({
       id: "reg-marketing-announcements",
       label: "Send me product announcements",
       type: "checkbox",
       checkbox: true,
     }),
-        marketingApps: field({
+    marketingApps: field({
       id: "reg-marketing-apps",
       label: "Send me updates about new features",
       type: "checkbox",
@@ -991,31 +1244,42 @@ async function renderRegister() {
 
   populateCountrySelect(fields.country.input);
   populateCountrySelect(fields.addressCountry.input);
+  const trust=el("input",{type:"checkbox"});
+  const bot=el("div",{});let readBot=()=>"";
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
 
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary btn--full" }, "Create account");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary btn--full" },
+    "Create account",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
-    el("div", { class: "form-row" }, [fields.firstName.wrapper, fields.lastName.wrapper]),
-    el("div", { class: "form-row" }, [fields.country.wrapper, fields.dateOfBirth.wrapper]),
+    el("div", { class: "form-row" }, [
+      fields.firstName.wrapper,
+      fields.lastName.wrapper,
+    ]),
+    el("div", { class: "form-row" }, [
+      fields.country.wrapper,
+      fields.dateOfBirth.wrapper,
+    ]),
     fields.email.wrapper,
     fields.username.wrapper,
-    fields.phone.wrapper,
-    el("div", { class: "form-row" }, [fields.password.wrapper, fields.confirmPassword.wrapper]),
-    el("fieldset", {}, [
-      el("legend", {}, "Address"),
-      fields.addressLine1.wrapper,
-      fields.addressLine2.wrapper,
-      el("div", { class: "form-row" }, [fields.addressCity.wrapper, fields.addressRegion.wrapper]),
-      el("div", { class: "form-row" }, [fields.addressPostalCode.wrapper, fields.addressCountry.wrapper]),
+    el("div", { class: "form-row" }, [
+      fields.password.wrapper,
+      fields.confirmPassword.wrapper,
     ]),
-     fields.marketingAnnouncements.wrapper,
+    el("label",{},[trust,el("span",{},"Trust this device")]),
+    bot,
+    fields.marketingAnnouncements.wrapper,
     fields.marketingApps.wrapper,
     submitBtn,
   ]);
+
+  apiFetch("/v1/config").then(c=>{if(c.bot.registrationRequired)return mountBot(bot,"register").then(r=>{readBot=r;});}).catch(()=>{bot.textContent="Human verification unavailable. Please retry later.";});
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1036,22 +1300,21 @@ async function renderRegister() {
       password: fields.password.input.value,
       confirmPassword: fields.confirmPassword.input.value,
       username: fields.username.input.value.trim().toLowerCase(),
-      phone: fields.phone.input.value.trim(),
-      address: {
-        line1: fields.addressLine1.input.value.trim(),
-        line2: fields.addressLine2.input.value.trim() || undefined,
-        city: fields.addressCity.input.value.trim(),
-        region: fields.addressRegion.input.value.trim() || undefined,
-        postalCode: fields.addressPostalCode.input.value.trim(),
-        country: fields.addressCountry.input.value,
-      },
+      marketingAnnouncements: fields.marketingAnnouncements.input.checked,
+      marketingApps: fields.marketingApps.input.checked,
+      timezone:Intl.DateTimeFormat().resolvedOptions().timeZone || "Africa/Johannesburg",
+      trustDevice:trust.checked,
+      captchaToken:readBot(),
     };
 
     try {
       await apiFetch("/v1/auth/register", { method: "POST", body: body });
       await loadSession();
-      navigate("/account");
-      toast("Account created. Check your email to verify your address.", "success");
+      navigate("/onboarding");
+      toast(
+        "Account created. Check your email to verify your address.",
+        "success",
+      );
     } catch (err) {
       if (err instanceof ApiError && err.status === 400 && err.details) {
         applyServerFieldErrors(fields, err.details);
@@ -1085,7 +1348,13 @@ async function renderRegister() {
 
 async function renderForgotPassword() {
   const fields = {
-    email: field({ id: "forgot-email", label: "Email", type: "email", required: true, autocomplete: "email" }),
+    email: field({
+      id: "forgot-email",
+      label: "Email",
+      type: "email",
+      required: true,
+      autocomplete: "email",
+    }),
   };
 
   const errorBanner = el("div", { class: "form-error" });
@@ -1093,9 +1362,18 @@ async function renderForgotPassword() {
   const successBanner = el("div", { class: "form-success" });
   successBanner.hidden = true;
 
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary btn--full" }, "Send reset link");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary btn--full" },
+    "Send reset link",
+  );
 
-  const form = el("form", { class: "form", novalidate: true }, [errorBanner, successBanner, fields.email.wrapper, submitBtn]);
+  const form = el("form", { class: "form", novalidate: true }, [
+    errorBanner,
+    successBanner,
+    fields.email.wrapper,
+    submitBtn,
+  ]);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1109,7 +1387,8 @@ async function renderForgotPassword() {
         body: { email: fields.email.input.value.trim() },
       });
       successBanner.textContent =
-        data.message || "If an account exists for that email, we've sent a reset link.";
+        data.message ||
+        "If an account exists for that email, we've sent a reset link.";
       successBanner.hidden = false;
       fields.email.input.value = "";
     } catch (err) {
@@ -1128,7 +1407,9 @@ async function renderForgotPassword() {
         el("p", {}, "We'll email you a link to choose a new one."),
       ]),
       el("div", { class: "card" }, [form]),
-      el("div", { class: "link-row" }, [el("a", { href: "#/login" }, "Back to sign in")]),
+      el("div", { class: "link-row" }, [
+        el("a", { href: "#/login" }, "Back to sign in"),
+      ]),
     ]),
   );
 }
@@ -1139,14 +1420,23 @@ async function renderForgotPassword() {
 
 async function renderResetPassword(params) {
   const token = params.get("token");
+  if (token) history.replaceState(null, "", "#" + parseHash().path);
 
   if (!token) {
     viewRoot.append(
       el("div", { class: "auth-shell" }, [
         el("div", { class: "page-head" }, [el("h1", {}, "Reset link invalid")]),
         el("div", { class: "card" }, [
-          el("p", {}, "This link is missing its reset token. Request a new one below."),
-          el("a", { class: "btn btn--primary", href: "#/forgot-password" }, "Request a new link"),
+          el(
+            "p",
+            {},
+            "This link is missing its reset token. Request a new one below.",
+          ),
+          el(
+            "a",
+            { class: "btn btn--primary", href: "#/forgot-password" },
+            "Request a new link",
+          ),
         ]),
       ]),
     );
@@ -1175,7 +1465,11 @@ async function renderResetPassword(params) {
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
 
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary btn--full" }, "Set new password");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary btn--full" },
+    "Set new password",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
@@ -1221,7 +1515,9 @@ async function renderResetPassword(params) {
 
   viewRoot.append(
     el("div", { class: "auth-shell" }, [
-      el("div", { class: "page-head" }, [el("h1", {}, "Choose a new password")]),
+      el("div", { class: "page-head" }, [
+        el("h1", {}, "Choose a new password"),
+      ]),
       el("div", { class: "card" }, [form]),
     ]),
   );
@@ -1233,10 +1529,16 @@ async function renderResetPassword(params) {
 
 async function renderVerifyEmail(params) {
   const token = params.get("token");
-  const card = el("div", { class: "card" }, [el("p", {}, "Checking your link…")]);
+  if (token) history.replaceState(null, "", "#" + parseHash().path);
+  const card = el("div", { class: "card" }, [
+    el("p", {}, "Checking your link…"),
+  ]);
 
   viewRoot.append(
-    el("div", { class: "auth-shell" }, [el("div", { class: "page-head" }, [el("h1", {}, "Verify your email")]), card]),
+    el("div", { class: "auth-shell" }, [
+      el("div", { class: "page-head" }, [el("h1", {}, "Verify your email")]),
+      card,
+    ]),
   );
 
   clearNode(card);
@@ -1244,22 +1546,49 @@ async function renderVerifyEmail(params) {
   if (!token) {
     card.append(
       el("p", {}, "This verification link is missing a token."),
-      el("a", { class: "btn btn--primary", href: state.user ? "#/account" : "#/login" }, "Continue"),
+      el(
+        "a",
+        {
+          class: "btn btn--primary",
+          href: state.user ? "#/account" : "#/login",
+        },
+        "Continue",
+      ),
     );
     return;
   }
 
   try {
-    await apiFetch("/v1/auth/verify-email", { method: "POST", body: { token: token } });
+    await apiFetch("/v1/auth/verify-email", {
+      method: "POST",
+      body: { token: token },
+    });
     if (state.user) await loadSession();
     card.append(
       el("p", { class: "form-success" }, "Your email address is verified."),
-      el("a", { class: "btn btn--primary", href: state.user ? "#/account" : "#/login" }, "Continue"),
+      el(
+        "a",
+        {
+          class: "btn btn--primary",
+          href: state.user ? "#/account" : "#/login",
+        },
+        "Continue",
+      ),
     );
   } catch (err) {
-    const actions = [el("a", { class: "btn btn--ghost", href: state.user ? "#/account" : "#/login" }, "Continue")];
+    const actions = [
+      el(
+        "a",
+        { class: "btn btn--ghost", href: state.user ? "#/account" : "#/login" },
+        "Continue",
+      ),
+    ];
     if (state.user) {
-      const resendBtn = el("button", { type: "button", class: "btn btn--primary" }, "Resend verification email");
+      const resendBtn = el(
+        "button",
+        { type: "button", class: "btn btn--primary" },
+        "Resend verification email",
+      );
       resendBtn.addEventListener("click", async () => {
         resendBtn.disabled = true;
         try {
@@ -1273,7 +1602,10 @@ async function renderVerifyEmail(params) {
       });
       actions.unshift(resendBtn);
     }
-    card.append(el("p", { class: "form-error" }, friendlyError(err)), el("div", { class: "btn-row" }, actions));
+    card.append(
+      el("p", { class: "form-error" }, friendlyError(err)),
+      el("div", { class: "btn-row" }, actions),
+    );
   }
 }
 
@@ -1282,6 +1614,7 @@ async function renderVerifyEmail(params) {
 /* ---------------------------------------------------------------------- */
 
 async function renderAccount() {
+  viewRoot.append(el("nav",{class:"btn-row"},[el("a",{href:"#/preferences",class:"btn btn--ghost"},"Preferences & recovery"),el("a",{href:"#/feedback",class:"btn btn--ghost"},"Feedback"),el("a",{href:"#/trash",class:"btn btn--ghost"},"Trash")]));
   await loadSession();
   if (!state.user) {
     navigate("/login");
@@ -1294,8 +1627,8 @@ async function renderAccount() {
 
   viewRoot.append(
     el("div", { class: "page-head" }, [
-      el("h1", {}, greetingForNow() + ", " + user.firstName + "."),
-      el("p", {}, "Here's where things stand."),
+      el("h1", {}, "Account & security"),
+      el("p", {}, "Your profile, sign-in methods, and account controls."),
     ]),
     buildStatusCard(user),
     el("div", { class: "section-grid" }, [
@@ -1312,12 +1645,23 @@ async function renderAccount() {
 }
 
 function buildResendVerificationButton() {
-  const btn = el("button", { type: "button", class: "btn btn--ghost btn--small" }, "Resend verification email");
+  const btn = el(
+    "button",
+    { type: "button", class: "btn btn--ghost btn--small" },
+    "Resend verification email",
+  );
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     try {
-      const data = await apiFetch("/v1/auth/verify-email/resend", { method: "POST" });
-      toast(data.alreadyVerified ? "Your email is already verified." : "Verification email sent.", "success");
+      const data = await apiFetch("/v1/auth/verify-email/resend", {
+        method: "POST",
+      });
+      toast(
+        data.alreadyVerified
+          ? "Your email is already verified."
+          : "Verification email sent.",
+        "success",
+      );
     } catch (err) {
       toast(friendlyError(err), "error");
     } finally {
@@ -1330,13 +1674,19 @@ function buildResendVerificationButton() {
 function buildStatusCard(user) {
   const body = el("div", { class: "status-card__body" }, [
     el("p", {}, "Account status"),
-    el("h2", {}, user.emailVerified ? "Your email is verified" : "Verify your email"),
+    el(
+      "h2",
+      {},
+      user.emailVerified ? "Your email is verified" : "Verify your email",
+    ),
     el(
       "p",
       { class: "card__hint" },
       user.emailVerified
         ? "You're all set."
-        : "Check " + user.email + " for a verification link, or resend it below.",
+        : "Check " +
+            user.email +
+            " for a verification link, or resend it below.",
     ),
   ]);
 
@@ -1350,23 +1700,66 @@ function buildStatusCard(user) {
 /* ---- Profile (name + address) ---- */
 
 function buildProfileCard(user, address) {
-  const countryName =
-    (COUNTRIES.find((c) => c[0] === user.country) || [null, user.country])[1];
+  const countryName = (COUNTRIES.find((c) => c[0] === user.country) || [
+    null,
+    user.country,
+  ])[1];
 
   const fields = {
-    firstName: field({ id: "profile-first-name", label: "First name", required: true, autocomplete: "given-name" }),
-    lastName: field({ id: "profile-last-name", label: "Last name", required: true, autocomplete: "family-name" }),
-    addressLine1: field({ id: "profile-address-line1", label: "Address line 1", required: true, autocomplete: "address-line1" }),
-    addressLine2: field({ id: "profile-address-line2", label: "Address line 2 (optional)", autocomplete: "address-line2" }),
-    addressCity: field({ id: "profile-address-city", label: "City", required: true, autocomplete: "address-level2" }),
-    addressRegion: field({ id: "profile-address-region", label: "State / region (optional)", autocomplete: "address-level1" }),
-    addressPostalCode: field({ id: "profile-address-postal", label: "Postal code", required: true, autocomplete: "postal-code" }),
-    addressCountry: field({ id: "profile-address-country", label: "Country", tag: "select", required: true }),
+    firstName: field({
+      id: "profile-first-name",
+      label: "First name",
+      required: true,
+      autocomplete: "given-name",
+    }),
+    lastName: field({
+      id: "profile-last-name",
+      label: "Last name",
+      required: true,
+      autocomplete: "family-name",
+    }),
+    addressLine1: field({
+      id: "profile-address-line1",
+      label: "Address line 1",
+      required: true,
+      autocomplete: "address-line1",
+    }),
+    addressLine2: field({
+      id: "profile-address-line2",
+      label: "Address line 2 (optional)",
+      autocomplete: "address-line2",
+    }),
+    addressCity: field({
+      id: "profile-address-city",
+      label: "City",
+      required: true,
+      autocomplete: "address-level2",
+    }),
+    addressRegion: field({
+      id: "profile-address-region",
+      label: "State / region (optional)",
+      autocomplete: "address-level1",
+    }),
+    addressPostalCode: field({
+      id: "profile-address-postal",
+      label: "Postal code",
+      required: true,
+      autocomplete: "postal-code",
+    }),
+    addressCountry: field({
+      id: "profile-address-country",
+      label: "Country",
+      tag: "select",
+      required: true,
+    }),
   };
 
   fields.firstName.input.value = user.firstName;
   fields.lastName.input.value = user.lastName;
-  populateCountrySelect(fields.addressCountry.input, address ? address.country : null);
+  populateCountrySelect(
+    fields.addressCountry.input,
+    address ? address.country : null,
+  );
   if (address) {
     fields.addressLine1.input.value = address.line1 || "";
     fields.addressLine2.input.value = address.line2 || "";
@@ -1377,17 +1770,30 @@ function buildProfileCard(user, address) {
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary" }, "Save profile");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary" },
+    "Save profile",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
-    el("div", { class: "form-row" }, [fields.firstName.wrapper, fields.lastName.wrapper]),
+    el("div", { class: "form-row" }, [
+      fields.firstName.wrapper,
+      fields.lastName.wrapper,
+    ]),
     el("fieldset", {}, [
       el("legend", {}, "Address"),
       fields.addressLine1.wrapper,
       fields.addressLine2.wrapper,
-      el("div", { class: "form-row" }, [fields.addressCity.wrapper, fields.addressRegion.wrapper]),
-      el("div", { class: "form-row" }, [fields.addressPostalCode.wrapper, fields.addressCountry.wrapper]),
+      el("div", { class: "form-row" }, [
+        fields.addressCity.wrapper,
+        fields.addressRegion.wrapper,
+      ]),
+      el("div", { class: "form-row" }, [
+        fields.addressPostalCode.wrapper,
+        fields.addressCountry.wrapper,
+      ]),
     ]),
     submitBtn,
   ]);
@@ -1432,7 +1838,11 @@ function buildProfileCard(user, address) {
 
   return el("div", { class: "card" }, [
     el("div", { class: "card__head" }, [el("h2", {}, "Profile")]),
-    el("p", { class: "card__hint" }, "Username @" + user.username + " · " + countryName),
+    el(
+      "p",
+      { class: "card__hint" },
+      "Username @" + user.username + " · " + countryName,
+    ),
     form,
   ]);
 }
@@ -1441,7 +1851,13 @@ function buildProfileCard(user, address) {
 
 function buildEmailCard(user) {
   const fields = {
-    email: field({ id: "email-new", label: "New email address", type: "email", required: true, autocomplete: "email" }),
+    email: field({
+      id: "email-new",
+      label: "New email address",
+      type: "email",
+      required: true,
+      autocomplete: "email",
+    }),
     currentPassword: field({
       id: "email-current-password",
       label: "Current password",
@@ -1453,7 +1869,11 @@ function buildEmailCard(user) {
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary" }, "Update email");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary" },
+    "Update email",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
@@ -1482,7 +1902,10 @@ function buildEmailCard(user) {
         state.user = null;
         state.address = null;
         navigate("/login");
-        toast("Email updated. Check your inbox to verify it, then sign in again.", "success");
+        toast(
+          "Email updated. Check your inbox to verify it, then sign in again.",
+          "success",
+        );
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 400 && err.details) {
@@ -1531,7 +1954,11 @@ function buildUsernameCard(user) {
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary" }, "Update username");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary" },
+    "Update username",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
@@ -1605,11 +2032,14 @@ function buildPhoneCard(user) {
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary" }, "Update phone");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary" },
+    "Update phone",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
-    fields.phone.wrapper,
     fields.currentPassword.wrapper,
     submitBtn,
   ]);
@@ -1629,7 +2059,12 @@ function buildPhoneCard(user) {
         },
       });
       await loadSession();
-      toast(data.unchanged ? "That's already your phone number." : "Phone number updated.", "success");
+      toast(
+        data.unchanged
+          ? "That's already your phone number."
+          : "Phone number updated.",
+        "success",
+      );
       fields.currentPassword.input.value = "";
     } catch (err) {
       if (err instanceof ApiError && err.status === 400 && err.details) {
@@ -1644,10 +2079,14 @@ function buildPhoneCard(user) {
   });
 
   return el("div", { class: "card" }, [
-    el("div", { class: "card__head" }, [
-      el("h2", {}, "Phone number"),
-    ]),
-    el("p", { class: "card__hint" }, user.phoneVerified === false ? "Phone verification isn't available yet." : ""),
+    el("div", { class: "card__head" }, [el("h2", {}, "Phone number")]),
+    el(
+      "p",
+      { class: "card__hint" },
+      user.phoneVerified === false
+        ? "Phone verification isn't available yet."
+        : "",
+    ),
     form,
   ]);
 }
@@ -1683,7 +2122,11 @@ function buildPasswordCard() {
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
-  const submitBtn = el("button", { type: "submit", class: "btn btn--primary" }, "Update password");
+  const submitBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary" },
+    "Update password",
+  );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
@@ -1715,7 +2158,10 @@ function buildPasswordCard() {
         },
       });
       form.reset();
-      toast("Password updated. You've been signed out of other devices.", "success");
+      toast(
+        "Password updated. You've been signed out of other devices.",
+        "success",
+      );
     } catch (err) {
       if (err instanceof ApiError && err.status === 400 && err.details) {
         applyServerFieldErrors(fields, err.details);
@@ -1728,29 +2174,45 @@ function buildPasswordCard() {
     }
   });
 
-  return el("div", { class: "card" }, [el("div", { class: "card__head" }, [el("h2", {}, "Password")]), form]);
+  return el("div", { class: "card" }, [
+    el("div", { class: "card__head" }, [el("h2", {}, "Password")]),
+    form,
+  ]);
 }
 
 /* ---- Sessions ---- */
 
 function buildSessionsCard() {
-  const listContainer = el("div", { class: "entity-list" }, [el("p", { class: "loading-note" }, "Loading sessions…")]);
+  const listContainer = el("div", { class: "entity-list" }, [
+    el("p", { class: "loading-note" }, "Loading sessions…"),
+  ]);
 
-  const revokeOthersBtn = el("button", { type: "button", class: "btn btn--ghost btn--small" }, "Sign out of other devices");
+  const revokeOthersBtn = el(
+    "button",
+    { type: "button", class: "btn btn--ghost btn--small" },
+    "Sign out of other devices",
+  );
 
   async function refreshSessions() {
     clearNode(listContainer);
-    listContainer.append(el("p", { class: "loading-note" }, "Loading sessions…"));
+    listContainer.append(
+      el("p", { class: "loading-note" }, "Loading sessions…"),
+    );
     try {
       const data = await apiFetch("/v1/me/sessions");
       clearNode(listContainer);
       if (!data.sessions.length) {
-        listContainer.append(el("p", { class: "empty-note" }, "No active sessions."));
+        listContainer.append(
+          el("p", { class: "empty-note" }, "No active sessions."),
+        );
         return;
       }
       data.sessions.forEach((s) => {
         const titleChildren = [describeUserAgent(s.userAgent)];
-        if (s.isCurrent) titleChildren.push(el("span", { class: "badge badge--current" }, "This device"));
+        if (s.isCurrent)
+          titleChildren.push(
+            el("span", { class: "badge badge--current" }, "This device"),
+          );
 
         const row = el("div", { class: "entity-row" }, [
           el("div", { class: "entity-row__meta" }, [
@@ -1758,13 +2220,19 @@ function buildSessionsCard() {
             el(
               "div",
               { class: "entity-row__sub" },
-              (s.ip ? s.ip + " · " : "") + "Signed in " + formatDateTime(s.createdAt),
+              (s.ip ? s.ip + " · " : "") +
+                "Signed in " +
+                formatDateTime(s.createdAt),
             ),
           ]),
         ]);
 
         if (!s.isCurrent) {
-          const revokeBtn = el("button", { type: "button", class: "btn btn--ghost btn--small" }, "Sign out");
+          const revokeBtn = el(
+            "button",
+            { type: "button", class: "btn btn--ghost btn--small" },
+            "Sign out",
+          );
           revokeBtn.addEventListener("click", async () => {
             const result = await confirmDialog({
               title: "Sign out this session?",
@@ -1775,7 +2243,11 @@ function buildSessionsCard() {
             if (!result.confirmed) return;
             revokeBtn.disabled = true;
             try {
-              await withReauth(() => apiFetch("/v1/me/sessions/" + encodeURIComponent(s.id), { method: "DELETE" }));
+              await withReauth(() =>
+                apiFetch("/v1/me/sessions/" + encodeURIComponent(s.id), {
+                  method: "DELETE",
+                }),
+              );
               toast("Session signed out.", "success");
               await refreshSessions();
             } catch (err) {
@@ -1791,7 +2263,9 @@ function buildSessionsCard() {
       });
     } catch (err) {
       clearNode(listContainer);
-      listContainer.append(el("p", { class: "form-error" }, friendlyError(err)));
+      listContainer.append(
+        el("p", { class: "form-error" }, friendlyError(err)),
+      );
     }
   }
 
@@ -1805,7 +2279,9 @@ function buildSessionsCard() {
     if (!result.confirmed) return;
     revokeOthersBtn.disabled = true;
     try {
-      const data = await withReauth(() => apiFetch("/v1/me/sessions/revoke-others", { method: "POST" }));
+      const data = await withReauth(() =>
+        apiFetch("/v1/me/sessions/revoke-others", { method: "POST" }),
+      );
       toast("Signed out of " + data.revoked + " other session(s).", "success");
       await refreshSessions();
     } catch (err) {
@@ -1818,8 +2294,15 @@ function buildSessionsCard() {
   refreshSessions();
 
   return el("div", { class: "card" }, [
-    el("div", { class: "card__head" }, [el("h2", {}, "Sessions"), revokeOthersBtn]),
-    el("p", { class: "card__hint" }, "Devices currently signed in to your account."),
+    el("div", { class: "card__head" }, [
+      el("h2", {}, "Sessions"),
+      revokeOthersBtn,
+    ]),
+    el(
+      "p",
+      { class: "card__hint" },
+      "Devices currently signed in to your account.",
+    ),
     listContainer,
   ]);
 }
@@ -1827,26 +2310,48 @@ function buildSessionsCard() {
 /* ---- Passkeys ---- */
 
 function buildPasskeysCard() {
-  const listContainer = el("div", { class: "entity-list" }, [el("p", { class: "loading-note" }, "Loading passkeys…")]);
+  const listContainer = el("div", { class: "entity-list" }, [
+    el("p", { class: "loading-note" }, "Loading passkeys…"),
+  ]);
 
   async function refreshPasskeys() {
     clearNode(listContainer);
-    listContainer.append(el("p", { class: "loading-note" }, "Loading passkeys…"));
+    listContainer.append(
+      el("p", { class: "loading-note" }, "Loading passkeys…"),
+    );
     try {
       const data = await apiFetch("/v1/auth/passkeys");
       clearNode(listContainer);
       if (!data.passkeys.length) {
-        listContainer.append(el("p", { class: "empty-note" }, "No passkeys yet. Add one to sign in without a password."));
+        listContainer.append(
+          el(
+            "p",
+            { class: "empty-note" },
+            "No passkeys yet. Add one to sign in without a password.",
+          ),
+        );
         return;
       }
       data.passkeys.forEach((p) => {
         const row = el("div", { class: "entity-row" }, [
           el("div", { class: "entity-row__meta" }, [
-            el("div", { class: "entity-row__title" }, p.deviceName || "Passkey"),
-            el("div", { class: "entity-row__sub" }, "Added " + formatDateTime(p.createdAt)),
+            el(
+              "div",
+              { class: "entity-row__title" },
+              p.deviceName || "Passkey",
+            ),
+            el(
+              "div",
+              { class: "entity-row__sub" },
+              "Added " + formatDateTime(p.createdAt),
+            ),
           ]),
         ]);
-        const removeBtn = el("button", { type: "button", class: "btn btn--ghost btn--small" }, "Remove");
+        const removeBtn = el(
+          "button",
+          { type: "button", class: "btn btn--ghost btn--small" },
+          "Remove",
+        );
         removeBtn.addEventListener("click", async () => {
           const result = await confirmDialog({
             title: "Remove this passkey?",
@@ -1857,7 +2362,11 @@ function buildPasskeysCard() {
           if (!result.confirmed) return;
           removeBtn.disabled = true;
           try {
-            await withReauth(() => apiFetch("/v1/auth/passkeys/" + encodeURIComponent(p.id), { method: "DELETE" }));
+            await withReauth(() =>
+              apiFetch("/v1/auth/passkeys/" + encodeURIComponent(p.id), {
+                method: "DELETE",
+              }),
+            );
             toast("Passkey removed.", "success");
             await refreshPasskeys();
           } catch (err) {
@@ -1871,7 +2380,9 @@ function buildPasskeysCard() {
       });
     } catch (err) {
       clearNode(listContainer);
-      listContainer.append(el("p", { class: "form-error" }, friendlyError(err)));
+      listContainer.append(
+        el("p", { class: "form-error" }, friendlyError(err)),
+      );
     }
   }
 
@@ -1882,7 +2393,11 @@ function buildPasskeysCard() {
       label: "Name this passkey (optional)",
       placeholder: "e.g. Work laptop",
     });
-    const addBtn = el("button", { type: "button", class: "btn btn--ghost btn--small" }, "Add a passkey");
+    const addBtn = el(
+      "button",
+      { type: "button", class: "btn btn--ghost btn--small" },
+      "Add a passkey",
+    );
     addBtn.addEventListener("click", async () => {
       addBtn.disabled = true;
       addBtn.textContent = "Follow your device's prompt…";
@@ -1900,7 +2415,11 @@ function buildPasskeysCard() {
     });
     addSection = el("div", { class: "form" }, [nameField.wrapper, addBtn]);
   } else {
-    addSection = el("p", { class: "card__hint" }, "Passkeys aren't supported in this browser.");
+    addSection = el(
+      "p",
+      { class: "card__hint" },
+      "Passkeys aren't supported in this browser.",
+    );
   }
 
   refreshPasskeys();
@@ -1917,15 +2436,24 @@ function buildPasskeysCard() {
 /* ---- Data & account (export, delete) ---- */
 
 function buildDataAccountCard(user) {
-  const exportBtn = el("button", { type: "button", class: "btn btn--ghost" }, "Download your data");
+  const exportBtn = el(
+    "button",
+    { type: "button", class: "btn btn--ghost" },
+    "Download your data",
+  );
   exportBtn.addEventListener("click", async () => {
     exportBtn.disabled = true;
     exportBtn.textContent = "Preparing download…";
     try {
       const data = await withReauth(() => apiFetch("/v1/me/export"));
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
       const url = URL.createObjectURL(blob);
-      const link = el("a", { href: url, download: "chalkline-account-data.json" });
+      const link = el("a", {
+        href: url,
+        download: "chalkline-account-data.json",
+      });
       document.body.append(link);
       link.click();
       link.remove();
@@ -1939,7 +2467,11 @@ function buildDataAccountCard(user) {
     }
   });
 
-  const deleteBtn = el("button", { type: "button", class: "btn btn--danger" }, "Delete account");
+  const deleteBtn = el(
+    "button",
+    { type: "button", class: "btn btn--danger" },
+    "Delete account",
+  );
   deleteBtn.addEventListener("click", async () => {
     const result = await confirmDialog({
       title: "Delete your account?",
@@ -1974,7 +2506,11 @@ function buildDataAccountCard(user) {
 
   return el("div", { class: "card card--danger" }, [
     el("div", { class: "card__head" }, [el("h2", {}, "Your data")]),
-    el("p", { class: "card__hint" }, "Download everything tied to your account, or permanently delete it."),
-    el("div", { class: "btn-row" }, [exportBtn, deleteBtn]),
+    el(
+      "p",
+      { class: "card__hint" },
+      "Download everything tied to your account, or permanently delete it.",
+    ),
+    el("div", { class: "btn-row" }, [deleteBtn]),
   ]);
 }

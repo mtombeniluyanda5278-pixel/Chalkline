@@ -1,0 +1,50 @@
+{
+  "name": "chalkline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc && node scripts/build-static.mjs",
+    "test": "NODE_ENV=test DOTENV_CONFIG_PATH=.env.test tsx --test --test-concurrency=1 src/**/*.test.ts",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "migrate": "node scripts/migrate.mjs",
+    "preview": "node scripts/serve-static.mjs",
+    "test:unit": "node --test tests/*.test.mjs",
+    "test:integration": "node scripts/test-integration.mjs",
+    "format:check": "prettier --check app.js workspace.js autosave.js src scripts tests styles.css index.html"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1131.0",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/multipart": "^10.1.1",
+    "@simplewebauthn/server": "^14.0.0",
+    "argon2": "^0.45.1",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.12.1",
+    "file-type": "^22.1.0",
+    "ioredis": "^6.0.0",
+    "pdfjs-dist": "^6.3.289",
+    "pg": "^8.23.0",
+    "saxes": "^6.0.0",
+    "yauzl": "^3.4.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/pg": "^8.23.1",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
+    "jsdom": "^30.0.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "yazl": "^3.3.1"
+  }
+}

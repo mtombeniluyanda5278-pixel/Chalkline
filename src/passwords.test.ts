@@ -6,7 +6,10 @@ import { hashPassword, verifyPassword } from "./passwords.js";
 test("argon2id hashes are not the plaintext and verify correctly", async () => {
   const hash = await hashPassword("correct horse battery staple");
   assert.notEqual(hash, "correct horse battery staple");
-  assert.equal(await verifyPassword(hash, "correct horse battery staple"), true);
+  assert.equal(
+    await verifyPassword(hash, "correct horse battery staple"),
+    true,
+  );
   assert.equal(await verifyPassword(hash, "wrong"), false);
 });
 

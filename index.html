@@ -1,42 +1,70 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chalkline</title>
-  <meta name="description" content="Manage your Chalkline account." />
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <a class="skip-link" href="#main">Skip to main content</a>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chix</title>
+    <meta
+      name="description"
+      content="A calmer space for your teaching day. Plan lessons, gather resources, and pick up where you left off."
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
 
-  <header class="site-header">
-    <div class="site-header__inner">
-      <a class="wordmark" href="#/">Chalkline</a>
-      <nav class="site-nav" id="site-nav" aria-label="Account navigation"></nav>
-    </div>
-  </header>
-
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-
-  <main id="main" class="app-main">
-    <div id="view-root" class="view-root"></div>
-  </main>
-
-  <dialog id="confirm-dialog" class="confirm-dialog">
-    <form method="dialog" class="confirm-dialog__form" id="confirm-dialog-form">
-      <h2 id="confirm-dialog-title" class="confirm-dialog__title"></h2>
-      <p id="confirm-dialog-body" class="confirm-dialog__body"></p>
-      <div id="confirm-dialog-extra" class="confirm-dialog__extra"></div>
-      <p id="confirm-dialog-error" class="field-error" hidden></p>
-      <div class="confirm-dialog__actions">
-        <button type="button" class="btn btn--ghost" id="confirm-dialog-cancel">Cancel</button>
-        <button type="submit" class="btn btn--danger" id="confirm-dialog-confirm">Confirm</button>
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="wordmark" href="#/">Chix</a>
+        <nav
+          class="site-nav"
+          id="site-nav"
+          aria-label="Account navigation"
+        ></nav>
       </div>
-    </form>
-  </dialog>
+    </header>
 
-  <noscript>Chalkline requires JavaScript to run.</noscript>
-  <script src="app.js" defer></script>
-</body>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <main id="main" class="app-main">
+      <div id="view-root" class="view-root"></div>
+    </main>
+
+    <dialog
+      id="confirm-dialog"
+      class="confirm-dialog"
+      aria-labelledby="confirm-dialog-title"
+      aria-describedby="confirm-dialog-body"
+    >
+      <form
+        method="dialog"
+        class="confirm-dialog__form"
+        id="confirm-dialog-form"
+      >
+        <h2 id="confirm-dialog-title" class="confirm-dialog__title"></h2>
+        <p id="confirm-dialog-body" class="confirm-dialog__body"></p>
+        <div id="confirm-dialog-extra" class="confirm-dialog__extra"></div>
+        <p id="confirm-dialog-error" class="field-error" hidden></p>
+        <div class="confirm-dialog__actions">
+          <button
+            type="button"
+            class="btn btn--ghost"
+            id="confirm-dialog-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="btn btn--danger"
+            id="confirm-dialog-confirm"
+          >
+            Confirm
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <noscript>Chix requires JavaScript to run.</noscript>
+    <script src="app.js" type="module"></script>
+  </body>
 </html>

@@ -4,10 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { buildApp } from "./app.js";
 import { pool } from "./db.js";
-import {
-  putChallenge,
-  takeChallenge,
-} from "./webauthn.js";
+import { putChallenge, takeChallenge } from "./webauthn.js";
 import {
   clearTestRateLimits,
   closeRedis,
@@ -53,10 +50,9 @@ before(async () => {
 
 after(async () => {
   if (createdEmails.length > 0) {
-    await pool.query(
-      `DELETE FROM users WHERE email = ANY($1::citext[])`,
-      [createdEmails.splice(0)],
-    );
+    await pool.query(`DELETE FROM users WHERE email = ANY($1::citext[])`, [
+      createdEmails.splice(0),
+    ]);
   }
 
   await app.close();
@@ -106,15 +102,13 @@ test("authenticated user can request passkey registration options", async () => 
     payload: input,
   });
 
-   assert.equal(registerResponse.statusCode, 201);
+  assert.equal(registerResponse.statusCode, 201);
 
   const cookieHeader = registerResponse.headers["set-cookie"];
 
   assert.ok(cookieHeader);
 
-  const cookie = Array.isArray(cookieHeader)
-    ? cookieHeader[0]
-    : cookieHeader;
+  const cookie = Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader;
 
   const response = await app.inject({
     method: "POST",
@@ -165,7 +159,7 @@ test("passkey login options return a challenge cookie", async () => {
 
   assert.match(cookie, /^chalkline_webauthn=/);
   assert.match(cookie, /HttpOnly/i);
-}); 
+});
 
 test("passkey login verify rejects an unknown credential", async () => {
   const optionsResponse = await app.inject({
@@ -179,9 +173,7 @@ test("passkey login verify rejects an unknown credential", async () => {
 
   assert.ok(setCookie);
 
-  const cookie = Array.isArray(setCookie)
-    ? setCookie[0]
-    : setCookie;
+  const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
 
   const response = await app.inject({
     method: "POST",

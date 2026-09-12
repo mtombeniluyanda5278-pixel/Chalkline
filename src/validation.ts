@@ -7,6 +7,7 @@ const RESERVED_USERNAMES = new Set([
   "support",
   "security",
   "chalkline",
+  "chix",
   "root",
   "help",
   "api",
@@ -14,11 +15,11 @@ const RESERVED_USERNAMES = new Set([
   "undefined",
 ]);
 
-function yearsAgo(date: Date): number {
-  const now = new Date();
-  let age = now.getFullYear() - date.getFullYear();
-  const m = now.getMonth() - date.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < date.getDate())) age -= 1;
+function yearsAgo(date: Date, timezone: string): number {
+  const now = new Date(new Date().toLocaleDateString("en-CA",{timeZone:timezone})+"T00:00:00Z");
+  let age = now.getUTCFullYear() - date.getUTCFullYear();
+  const m = now.getUTCMonth() - date.getUTCMonth();
+  if (m < 0 || (m === 0 && now.getUTCDate() < date.getUTCDate())) age -= 1;
   return age;
 }
 
@@ -36,7 +37,7 @@ export const AddressInput = z.strictObject({
 });
 
 export const RegisterInput = z
-  .object({
+  .strictObject({
     firstName: z.string().trim().min(1).max(50),
     lastName: z.string().trim().min(1).max(50),
     country: z
@@ -56,20 +57,35 @@ export const RegisterInput = z
     phone: z
       .string()
       .trim()
-      .regex(/^\+[1-9]\d{7,14}$/, "Use E.164, e.g. +27111234567"),
-    address: AddressInput,
+      .regex(/^\+[1-9]\d{7,14}$/, "Use E.164, e.g. +27111234567").optional(),
+    address: AddressInput.optional(),
+    timezone: z.string().max(100).default("Africa/Johannesburg").refine(v=>{try {new Intl.DateTimeFormat("en",{timeZone:v});return true;}catch{return false;}}),
+    captchaToken: z.string().max(4096).optional(),
+    trustDevice: z.boolean().default(false),
     marketingAnnouncements: z.boolean().default(false),
     marketingApps: z.boolean().default(false),
   })
   .superRefine((data, ctx) => {
     if (data.password !== data.confirmPassword) {
-      ctx.addIssue({ code: "custom", path: ["confirmPassword"], message: "Passwords do not match" });
+      ctx.addIssue({
+        code: "custom",
+        path: ["confirmPassword"],
+        message: "Passwords do not match",
+      });
     }
     if (RESERVED_USERNAMES.has(data.username)) {
-      ctx.addIssue({ code: "custom", path: ["username"], message: "Username is reserved" });
+      ctx.addIssue({
+        code: "custom",
+        path: ["username"],
+        message: "Username is reserved",
+      });
     }
     const dob = new Date(`${data.dateOfBirth}T00:00:00Z`);
-    if (Number.isNaN(dob.getTime()) || yearsAgo(dob) < config.MIN_ACCOUNT_AGE_YEARS) {
+    if (
+      Number.isNaN(dob.getTime()) ||
+      dob.toISOString().slice(0, 10) !== data.dateOfBirth ||
+      yearsAgo(dob,data.timezone) < config.MIN_ACCOUNT_AGE_YEARS
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["dateOfBirth"],
@@ -81,10 +97,12 @@ export const RegisterInput = z
 export const LoginInput = z.strictObject({
   email: z.string().trim().email().toLowerCase(),
   password: z.string().min(1).max(72),
+  captchaToken: z.string().max(4096).optional(),
+  trustDevice: z.boolean().default(false),
 });
 
 export const VerifyEmailInput = z.strictObject({
-  token: z.string().min(20),
+  token: z.string().min(20).max(200),
 });
 
 export const AccountDeleteInput = z.strictObject({
@@ -92,7 +110,7 @@ export const AccountDeleteInput = z.strictObject({
 });
 
 export const PasswordChangeInput = z
-  .object({
+  .strictObject({
     currentPassword: z.string().min(1).max(72),
     newPassword: z.string().min(12).max(72),
     confirmPassword: z.string(),
@@ -103,12 +121,13 @@ export const PasswordChangeInput = z
   });
 
 export const PasswordResetRequestInput = z.strictObject({
+  captchaToken: z.string().max(4096).optional(),
   email: z.string().trim().email().toLowerCase(),
 });
 
 export const PasswordResetConfirmInput = z
-  .object({
-    token: z.string().min(20),
+  .strictObject({
+    token: z.string().min(20).max(200),
     password: z.string().min(12).max(72),
     confirmPassword: z.string(),
   })
@@ -129,7 +148,7 @@ export const EmailChangeInput = z.strictObject({
 });
 
 export const UsernameChangeInput = z
-  .object({
+  .strictObject({
     username: z
       .string()
       .trim()

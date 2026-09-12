@@ -1,6 +1,9 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { Redis } from "ioredis";
 import { config } from "./config.js";
 
+const identitySecret = config.RATE_LIMIT_KEY_SECRET ?? randomBytes(32).toString("hex");
+export const opaqueIdentity = (identity: string) => createHmac("sha256",identitySecret).update(identity).digest("hex");
 type Bucket = { max: number; windowMs: number };
 
 export const redis = new Redis(config.REDIS_URL, {
@@ -10,27 +13,26 @@ export const redis = new Redis(config.REDIS_URL, {
 });
 
 export const buckets = {
-  login: { max: 5, windowMs: 15 * 60 * 1000 },
+  login: { max: 30, windowMs: 15 * 60 * 1000 },
   signup: { max: 5, windowMs: 60 * 60 * 1000 },
   passwordReset: { max: 3, windowMs: 60 * 60 * 1000 },
   passwordChange: { max: 5, windowMs: 15 * 60 * 1000 },
   resendVerification: { max: 3, windowMs: 60 * 60 * 1000 },
   accountDelete: { max: 3, windowMs: 60 * 60 * 1000 },
   emailChange: { max: 3, windowMs: 60 * 60 * 1000 },
-   accountChange: { max: 5, windowMs: 15 * 60 * 1000 },
+  accountChange: { max: 5, windowMs: 15 * 60 * 1000 },
   admin: { max: 60, windowMs: 60 * 1000 },
   webauthn: { max: 10, windowMs: 60 * 1000 },
+  upload: { max: 30, windowMs: 60 * 60 * 1000 },
+  download: { max: 30, windowMs: 60 * 1000 },
+  workspaceWrite: { max: 60, windowMs: 60 * 1000 },
+  deviceChallenge: { max: 5, windowMs: 15 * 60 * 1000 },
+  deviceApproval: { max: 10, windowMs: 15 * 60 * 1000 },
+  search: { max: 60, windowMs: 60 * 1000 },
+  feedback: { max: 5, windowMs: 60 * 60 * 1000 },
+  recoveryIp: { max: 10, windowMs: 60 * 60 * 1000 },
   global: { max: 120, windowMs: 60 * 1000 },
 } as const satisfies Record<string, Bucket>;
-
-// NOTE: no in-memory fallback in this version — Redis is required in every
-// environment, dev included. That's a deliberate simplification (it matches
-// the fact that dev already runs Redis via docker-compose, and it's what
-// the atomic Lua-based consumeRateLimit below needs anyway), but it does
-// mean a Redis outage takes the *entire* app down, including /health, since
-// the global onRequest hook in app.ts calls consumeRateLimit("global", ...)
-// on every request. If that trade-off isn't wanted, reintroduce a
-// try/catch + in-memory Map fallback here, matching the previous design.
 
 export async function connectRedis(): Promise<void> {
   if (redis.status === "ready") {
@@ -62,9 +64,9 @@ export async function consumeRateLimit(
   identity: string,
 ): Promise<{ allowed: boolean; retryAfterSec: number }> {
   const bucket = buckets[name];
-  const key = `rl:${name}:${identity}`;
+  const key = `rl:${name}:${opaqueIdentity(identity)}`;
 
-    if (redis.status !== "ready") {
+  if (redis.status !== "ready") {
     const error = new Error("Rate limiter Redis is unavailable.");
     error.name = "RateLimiterUnavailableError";
     throw error;
@@ -89,7 +91,10 @@ export async function consumeRateLimit(
 
   const [count, ttlMs] = result;
 
-  const retryAfterSec = Math.max(1, Math.ceil((ttlMs > 0 ? ttlMs : bucket.windowMs) / 1000));
+  const retryAfterSec = Math.max(
+    1,
+    Math.ceil((ttlMs > 0 ? ttlMs : bucket.windowMs) / 1000),
+  );
 
   return {
     allowed: count <= bucket.max,
@@ -97,9 +102,7 @@ export async function consumeRateLimit(
   };
 }
 
-// Prefer X-Forwarded-For when present (e.g. behind a reverse proxy or load
-// balancer) — falling back to req.ip alone would put every client behind
-// the same proxy into one shared rate-limit bucket.
+// Only Fastify trusted-proxy resolution may determine the client IP.
 
 export function clientIp(req: { ip?: string }): string {
   return req.ip ?? "0.0.0.0";

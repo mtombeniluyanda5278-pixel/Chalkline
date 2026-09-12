@@ -1,8 +1,22 @@
 .env
-.env.example
 .env.test
-package.json
-package-lock.json
 node_modules/
 dist/
 *.zip
+.vercel
+mail/
+public-build/
+.env.*
+!.env.example
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+env/
+.venv/
+mail/
+*.pem
+*.key
+*.p12
+*.pfx

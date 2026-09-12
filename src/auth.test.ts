@@ -4,11 +4,7 @@ import assert from "node:assert/strict";
 
 import { buildApp } from "./app.js";
 import { pool } from "./db.js";
-import {
-  clearTestRateLimits,
-  closeRedis,
-  connectRedis,
-} from "./rateLimit.js";
+import { clearTestRateLimits, closeRedis, connectRedis } from "./rateLimit.js";
 
 const app = await buildApp();
 
@@ -25,10 +21,9 @@ afterEach(async () => {
     return;
   }
 
-  await pool.query(
-    `DELETE FROM users WHERE email = ANY($1::citext[])`,
-    [createdEmails.splice(0)],
-  );
+  await pool.query(`DELETE FROM users WHERE email = ANY($1::citext[])`, [
+    createdEmails.splice(0),
+  ]);
 });
 
 after(async () => {
@@ -146,6 +141,15 @@ test("POST /v1/auth/login authenticates an existing user", async () => {
   const response = await app.inject({
     method: "POST",
     url: "/v1/auth/login",
+    headers: {
+      cookie: (Array.isArray(registerResponse.headers["set-cookie"])
+        ? registerResponse.headers["set-cookie"]
+        : [registerResponse.headers["set-cookie"]]
+      )
+        .filter(Boolean)
+        .map((c) => c!.split(";")[0])
+        .join("; "),
+    },
     payload: {
       email: input.email,
       password: input.password,

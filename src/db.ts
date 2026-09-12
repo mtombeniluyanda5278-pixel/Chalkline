@@ -2,6 +2,9 @@ import pg from "pg";
 
 import { config } from "./config.js";
 
+// Keep calendar dates as dates, independent of the backend timezone.
+pg.types.setTypeParser(1082, (value) => value);
+
 export const pool = new pg.Pool({
   connectionString: config.DATABASE_URL,
 

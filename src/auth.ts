@@ -1,3 +1,10 @@
+import { config } from "./config.js";
+import { issueEmailToken, consumeEmailToken } from "./tokens.js";
+import { verifyBot, loginProtection, failedLogin } from "./bot.js";
+import { completeSignIn } from "./devices.js";
+import { securityEvent } from "./security.js";
+import { authLink } from "./mail.js";
+import { transaction } from "./transactions.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { pool } from "./db.js";
 import {
@@ -8,8 +15,8 @@ import { hashPassword, verifyPassword } from "./passwords.js";
 import { buckets, clientIp, consumeRateLimit } from "./rateLimit.js";
 import {
   SESSION_COOKIE,
+  hashToken,
   clearSessionCookie,
-  consumeOneTimeToken,
   createOneTimeToken,
   createSession,
   destroyAllSessions,
@@ -48,7 +55,9 @@ async function rateLimitOr429(
   const result = await consumeRateLimit(name, identity);
   if (!result.allowed) {
     reply.header("Retry-After", String(result.retryAfterSec));
-    await reply.code(429).send({ error: "Too many requests. Try again later." });
+    await reply
+      .code(429)
+      .send({ error: "Too many requests. Try again later." });
     return false;
   }
   return true;
@@ -99,7 +108,7 @@ export async function requireUser(
 // cookie is enough to browse the account, but not enough to do things like
 // register a new passkey, which would let someone bypass the password
 // entirely on future logins.
-export const STEP_UP_WINDOW_MS = 15 * 60 * 1000;
+export const STEP_UP_WINDOW_MS = 10 * 60 * 1000;
 
 export async function requireRecentAuth(
   sessionUser: SessionUser,
@@ -124,9 +133,12 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = RegisterInput.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "Invalid input.", details: parsed.error.flatten() });
+      return reply
+        .code(400)
+        .send({ error: "Invalid input.", details: parsed.error.flatten() });
     }
     const body = parsed.data;
+    if (config.BOT_REQUIRE_REGISTRATION) await verifyBot(body.captchaToken, "register");
     const passwordHash = await hashPassword(body.password);
 
     const client = await pool.connect();
@@ -149,14 +161,14 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           body.lastName,
           body.country,
           body.dateOfBirth,
-          body.phone,
+          body.phone ?? null,
           body.marketingAnnouncements,
           body.marketingApps,
         ],
       );
       const userRow = userInsert.rows[0]!;
       const userId = userRow.id;
-      await client.query(
+      if (body.address) await client.query(
         `INSERT INTO addresses (user_id, line1, line2, city, region, postal_code, country)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [
@@ -169,41 +181,14 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           body.address.country,
         ],
       );
+      await client.query("UPDATE users SET session_days=$2,timezone=$3 WHERE id=$1", [userId,config.SESSION_DEFAULT_DAYS,body.timezone]);
+      await issueEmailToken(client,userId,"verify_email",body.email);
+      await client.query("INSERT INTO security_events(user_id,event) VALUES($1,'account_created')",[userId]);
+      await sendAdminAccountCreatedNotification({userId,createdAt:userRow.created_at},client);
       await client.query("COMMIT");
-transactionCommitted = true;
+      transactionCommitted = true;
 
-try {
-  await sendAdminAccountCreatedNotification({
-    username: body.username,
-    email: body.email,
-    createdAt: userRow.created_at,
-  });
-} catch (err: unknown) {
-  req.log.error(err, "Failed to deliver admin account-created notification");
-}
-
-const verifyToken = await createOneTimeToken(userId, "verify_email");
-
-      try {
-        await deliverDevOrLogEmail({
-          to: body.email,
-          subject: "Verify your Chalkline email",
-          body: `Verification token (dev only): ${verifyToken}`,
-        });
-      } catch (err: unknown) {
-        // The account has already been committed successfully.
-        // Do not report registration as failed just because the email
-        // provider is temporarily unavailable. Log the infrastructure
-        // failure without exposing the verification token.
-        req.log.error(err, "Failed to deliver verification email");
-      }
-
-      const session = await createSession(userId, {
-        ip,
-        userAgent: req.headers["user-agent"],
-      });
-
-      setSessionCookie(reply, session);
+      await completeSignIn(req, reply, userId, "registration");
       return reply.code(201).send({
         user: {
           id: userId,
@@ -220,11 +205,16 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       if (!transactionCommitted) {
         await client.query("ROLLBACK");
       }
-      const code = typeof err === "object" && err && "code" in err ? String((err as { code: string }).code) : "";
+      const code =
+        typeof err === "object" && err && "code" in err
+          ? String((err as { code: string }).code)
+          : "";
       if (code === "23505") {
-        return reply.code(409).send({ error: "An account with that email or username already exists." });
+        return reply.code(409).send({
+          error: "An account with that email or username already exists.",
+        });
       }
-      req.log.error(err);
+      req.log.error("Account operation failed");
       return reply.code(500).send({ error: "Could not create account." });
     } finally {
       client.release();
@@ -237,10 +227,13 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
     if (!parsed.success) {
       return reply.code(400).send({ error: "Invalid input." });
     }
-    if (!(await rateLimitOr429(reply, "login", `${ip}:${parsed.data.email}`))) return;
+    if (!(await rateLimitOr429(reply, "login", ip)))
+      return;
 
+    await loginProtection(parsed.data.email,ip,parsed.data.captchaToken);
     const found = await pool.query<{
       id: string;
+      auth_epoch: number;
       password_hash: string | null;
       locked_until: Date | null;
       email: string;
@@ -251,9 +244,9 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       email_verified_at: Date | null;
       phone_verified_at: Date | null;
     }>(
-      `SELECT id, password_hash, locked_until, email, username, first_name, last_name, country,
+      `SELECT id, auth_epoch, password_hash, locked_until, email, username, first_name, last_name, country,
               email_verified_at, phone_verified_at
-         FROM users WHERE email = $1`,
+         FROM users WHERE email = $1 AND suspended_at IS NULL`,
       [parsed.data.email],
     );
     const user = found.rows[0];
@@ -267,48 +260,45 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
     const hash = user?.password_hash ?? DUMMY_ARGON2;
     const passwordOk = await verifyPassword(hash, parsed.data.password);
 
-    if (!user || !user.password_hash) {
-      return reply.code(401).send({ error: "Invalid email or password." });
+    if (!user || !user.password_hash || !passwordOk) {
+      await failedLogin(parsed.data.email,ip);
+      if(user) await securityEvent(user.id,"login_failed",ip);
+      return reply.code(401).send({error:"Invalid email or password."});
     }
-
-    if (user.locked_until && user.locked_until > new Date()) {
-      return reply.code(401).send({ error: "Invalid email or password." });
-    }
-
-    if (!passwordOk) {
-      await pool.query(
-        `UPDATE users
-            SET failed_login_count = failed_login_count + 1,
-                locked_until = CASE
-                  WHEN failed_login_count + 1 >= 5
-                  THEN now() + interval '15 minutes'
-                  ELSE locked_until
-                END
-          WHERE id = $1`,
-        [user.id],
-      );
-
-      return reply.code(401).send({
-        error: "Invalid email or password.",
-      });
-    }
-
-    await pool.query(
-      `UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = $1`,
-      [user.id],
+    const approval = await completeSignIn(
+      req,
+      reply,
+      user.id,
+      "password",
+      user.auth_epoch,
     );
-
-    const session = await createSession(user.id, {
-      ip,
-      userAgent: req.headers["user-agent"],
-    });
-
-    setSessionCookie(reply, session);
+    if (approval) return reply.code(202).send(approval);
 
     return { user: publicUser(user) };
   });
 
+  app.post("/v1/auth/reauth", async (req, reply) => {
+    const user = await requireUser(req, reply);
+    if (!user) return;
+    if (!(await rateLimitOr429(reply, "passwordChange", user.id))) return;
+    const body = req.body as { password?: unknown } | undefined;
+    if (typeof body?.password !== "string" || body.password.length > 72)
+      return reply.code(400).send({ error: "Invalid request." });
+    const row = (
+      await pool.query("SELECT password_hash FROM users WHERE id=$1", [user.id])
+    ).rows[0];
+    if (
+      !row?.password_hash ||
+      !(await verifyPassword(row.password_hash, body.password))
+    )
+      return reply.code(401).send({ error: "Current password is incorrect." });
+    await markSessionReauthenticated(user.sessionId);
+    return { ok: true };
+  });
+
   app.post("/v1/auth/logout", async (req, reply) => {
+    const actor = await readSessionUser(req);
+    if (actor) await securityEvent(actor.id, "logout", req.ip);
     const raw = req.cookies[SESSION_COOKIE];
     if (raw) await destroySession(raw);
     clearSessionCookie(reply);
@@ -323,7 +313,7 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
               u.email_verified_at, u.phone_verified_at,
               a.line1, a.line2, a.city, a.region, a.postal_code, a.country AS address_country
          FROM users u
-         JOIN addresses a ON a.user_id = u.id
+         LEFT JOIN addresses a ON a.user_id = u.id
         WHERE u.id = $1`,
       [sessionUser.id],
     );
@@ -345,127 +335,6 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
   // Full data export. Gated by requireRecentAuth since it dumps everything
   // tied to the account (sessions, tokens, credentials included) — a stale
   // hijacked session shouldn't be able to exfiltrate this quietly.
-  app.get("/v1/me/export", async (req, reply) => {
-    const sessionUser = await requireUser(req, reply);
-    if (!sessionUser) return;
-
-    if (!(await requireRecentAuth(sessionUser, reply))) return;
-
-    const userResult = await pool.query<{
-      id: string;
-      email: string;
-      email_verified_at: Date | null;
-      username: string;
-      first_name: string;
-      last_name: string;
-      country: string;
-      date_of_birth: string;
-      phone_e164: string | null;
-      phone_verified_at: Date | null;
-      marketing_announcements: boolean;
-      marketing_apps: boolean;
-      consents_at: Date | null;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, email, email_verified_at, username, first_name, last_name,
-              country, date_of_birth, phone_e164, phone_verified_at,
-              marketing_announcements, marketing_apps, consents_at,
-              created_at, updated_at
-         FROM users
-        WHERE id = $1`,
-      [sessionUser.id],
-    );
-
-    const user = userResult.rows[0];
-    if (!user) return reply.code(404).send({ error: "Not found." });
-
-    const addressResult = await pool.query<{
-      id: string;
-      line1: string;
-      line2: string | null;
-      city: string;
-      region: string | null;
-      postal_code: string;
-      country: string;
-      created_at: Date;
-      updated_at: Date;
-    }>(
-      `SELECT id, line1, line2, city, region, postal_code, country,
-              created_at, updated_at
-         FROM addresses
-        WHERE user_id = $1`,
-      [sessionUser.id],
-    );
-
-    const sessionsResult = await pool.query<{
-      id: string;
-      expires_at: Date;
-      created_at: Date;
-      ip: string | null;
-      user_agent: string | null;
-      reauthenticated_at: Date;
-    }>(
-      `SELECT id, expires_at, created_at, ip, user_agent, reauthenticated_at
-         FROM sessions
-        WHERE user_id = $1
-        ORDER BY created_at DESC`,
-      [sessionUser.id],
-    );
-
-    const tokensResult = await pool.query<{
-      id: string;
-      purpose: string;
-      expires_at: Date;
-      used_at: Date | null;
-      created_at: Date;
-    }>(
-      `SELECT id, purpose, expires_at, used_at, created_at
-         FROM email_tokens
-        WHERE user_id = $1
-        ORDER BY created_at DESC`,
-      [sessionUser.id],
-    );
-
-    const credentialsResult = await pool.query<{
-      id: string;
-      device_name: string | null;
-      counter: string;
-      created_at: Date;
-    }>(
-      `SELECT id, device_name, counter, created_at
-         FROM webauthn_credentials
-        WHERE user_id = $1
-        ORDER BY created_at DESC`,
-      [sessionUser.id],
-    );
-
-    return {
-      exportedAt: new Date().toISOString(),
-      user: {
-        id: user.id,
-        email: user.email,
-        emailVerifiedAt: user.email_verified_at,
-        username: user.username,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        country: user.country,
-        dateOfBirth: user.date_of_birth,
-        phone: user.phone_e164,
-        phoneVerifiedAt: user.phone_verified_at,
-        marketingAnnouncements: user.marketing_announcements,
-        marketingApps: user.marketing_apps,
-        consentsAt: user.consents_at,
-        createdAt: user.created_at,
-        updatedAt: user.updated_at,
-      },
-      address: addressResult.rows[0] ?? null,
-      sessions: sessionsResult.rows,
-      emailTokens: tokensResult.rows,
-      webauthnCredentials: credentialsResult.rows,
-    };
-  });
-
   app.post("/v1/me/email", async (req, reply) => {
     const sessionUser = await requireUser(req, reply);
     if (!sessionUser) return;
@@ -515,52 +384,13 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       return { ok: true, unchanged: true };
     }
 
-    try {
-      const updateResult = await pool.query(
-        `UPDATE users
-            SET email = $2,
-                email_verified_at = NULL,
-                updated_at = now()
-          WHERE id = $1
-            AND email = $3`,
-        [sessionUser.id, email, row.email],
-      );
-
-      if ((updateResult.rowCount ?? 0) === 0) {
-        return reply.code(409).send({
-          error: "The account email changed. Please try again.",
-        });
-      }
-    } catch (err: unknown) {
-      if (err && typeof err === "object" && "code" in err && err.code === "23505") {
-        return reply.code(409).send({
-          error: "That email address is already in use.",
-        });
-      }
-
-      throw err;
-    }
-
-    const token = await createOneTimeToken(sessionUser.id, "verify_email");
-
-    // Invalidate all existing sessions immediately after the email change.
-    await destroyAllSessions(sessionUser.id);
-    clearSessionCookie(reply);
-
-    try {
-      await deliverDevOrLogEmail({
-        to: email,
-        subject: "Verify your Chalkline email",
-        body: `Verification token (dev only): ${token}`,
-      });
-    } catch (err: unknown) {
-      req.log.error(err, "Failed to deliver email-change verification email");
-    }
-
-    return {
-      ok: true,
-      emailVerificationRequired: true,
-    };
+    await transaction(async c => {
+      const current=(await c.query("SELECT email,password_hash FROM users WHERE id=$1 FOR UPDATE",[sessionUser.id])).rows[0];
+      if(current.email!==row.email || current.password_hash!==row.password_hash) throw Object.assign(new Error("Credentials changed. Try again."),{statusCode:409});
+      await issueEmailToken(c,sessionUser.id,"change_email",email);
+      await securityEvent(sessionUser.id,"email_change_requested",req.ip,c);
+    });
+    return {ok:true,emailVerificationRequired:true};
   });
 
   app.patch("/v1/me", async (req, reply) => {
@@ -568,7 +398,9 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
     if (!sessionUser) return;
     const parsed = ProfileUpdateInput.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "Invalid input.", details: parsed.error.flatten() });
+      return reply
+        .code(400)
+        .send({ error: "Invalid input.", details: parsed.error.flatten() });
     }
     const body = parsed.data;
     if (body.firstName || body.lastName) {
@@ -656,7 +488,12 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
         [sessionUser.id, username],
       );
     } catch (err: unknown) {
-      if (err && typeof err === "object" && "code" in err && err.code === "23505") {
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        err.code === "23505"
+      ) {
         return reply.code(409).send({
           error: "That username is already in use.",
         });
@@ -739,11 +576,14 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
   app.post("/v1/me/password", async (req, reply) => {
     const sessionUser = await requireUser(req, reply);
     if (!sessionUser) return;
-    if (!(await rateLimitOr429(reply, "passwordChange", sessionUser.id))) return;
+    if (!(await rateLimitOr429(reply, "passwordChange", sessionUser.id)))
+      return;
 
     const parsed = PasswordChangeInput.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "Invalid input.", details: parsed.error.flatten() });
+      return reply
+        .code(400)
+        .send({ error: "Invalid input.", details: parsed.error.flatten() });
     }
     const body = parsed.data;
 
@@ -761,22 +601,39 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       });
     }
 
-    // Note: PasswordChangeInput's own superRefine already rejects
-    // newPassword === currentPassword, so there's no need to re-check it
-    // here — safeParse would have already failed with a 400 above.
+    if (!(await requireRecentAuth(sessionUser, reply))) return;
+    if (await verifyPassword(hash,body.newPassword)) return reply.code(400).send({error:"Choose a different new password."});
 
     const newHash = await hashPassword(body.newPassword);
-    await pool.query(`UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`, [
-      sessionUser.id,
-      newHash,
-    ]);
-
-    // Rotate sessions: a changed password should invalidate any other logged-in
-    // device/browser. Destroy everything, then re-issue a fresh session for the
-    // request that just proved it knows the new password.
-    await destroyAllSessions(sessionUser.id);
+    const changed = await transaction(async (c) => {
+      const r = await c.query(
+        "UPDATE users SET password_hash=$2,auth_epoch=auth_epoch+1,updated_at=now() WHERE id=$1 AND password_hash=$3 RETURNING auth_epoch",
+        [sessionUser.id, newHash, row.password_hash],
+      );
+      if (!r.rowCount) return null;
+      await c.query("DELETE FROM sessions WHERE user_id=$1", [sessionUser.id]);
+      await c.query(
+        "UPDATE device_challenges SET status='denied' WHERE user_id=$1 AND status IN ('pending','approved')",
+        [sessionUser.id],
+      );
+      await c.query(
+        "DELETE FROM email_tokens WHERE user_id=$1 AND purpose='reset_password'",
+        [sessionUser.id],
+      );
+      await securityEvent(sessionUser.id, "password_changed", req.ip,c);
+      return r.rows[0];
+    });
+    if (!changed)
+      return reply
+        .code(409)
+        .send({ error: "Password changed. Sign in again." });
     const ip = clientIp(req);
-    const session = await createSession(sessionUser.id, { ip, userAgent: req.headers["user-agent"] });
+    const session = await createSession(sessionUser.id, {
+      ip,
+      userAgent: req.headers["user-agent"],
+      deviceId: sessionUser.deviceId ?? undefined,
+      authEpoch: changed.auth_epoch,
+    });
     setSessionCookie(reply, session);
     return { ok: true };
   });
@@ -816,6 +673,7 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
     if (!(await rateLimitOr429(reply, "accountChange", sessionUser.id))) return;
 
     const { id } = req.params as { id: string };
+    await securityEvent(sessionUser.id, "session_revoked", req.ip);
     const deleted = await destroySessionById(sessionUser.id, id);
     if (!deleted) return reply.code(404).send({ error: "Session not found." });
     if (id === sessionUser.sessionId) {
@@ -832,7 +690,11 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
     if (!(await requireRecentAuth(sessionUser, reply))) return;
     if (!(await rateLimitOr429(reply, "accountChange", sessionUser.id))) return;
 
-    const revoked = await destroyOtherSessions(sessionUser.id, sessionUser.sessionId);
+    await securityEvent(sessionUser.id, "other_sessions_revoked", req.ip);
+    const revoked = await destroyOtherSessions(
+      sessionUser.id,
+      sessionUser.sessionId,
+    );
     return { ok: true, revoked };
   });
 
@@ -870,7 +732,10 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
         });
       }
 
-      const passwordOk = await verifyPassword(row.password_hash, parsed.data.password);
+      const passwordOk = await verifyPassword(
+        row.password_hash,
+        parsed.data.password,
+      );
 
       if (!passwordOk) {
         return reply.code(401).send({
@@ -879,7 +744,13 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       }
     }
 
-    await pool.query(`DELETE FROM users WHERE id = $1`, [sessionUser.id]);
+    await transaction(async c => {
+      const owner=(await c.query("SELECT email,password_hash FROM users WHERE id=$1 FOR UPDATE",[sessionUser.id])).rows[0];
+      if(!owner || owner.password_hash!==row.password_hash) throw Object.assign(new Error("Credentials changed. Try again."),{statusCode:409});
+      await deliverDevOrLogEmail({to:owner.email,subject:"Your Chix account was deleted",body:`Account deletion completed at ${new Date().toISOString()}.`},c,`account-deleted:${sessionUser.id}`);
+      await c.query("UPDATE notification_outbox SET expires_at=now()+interval '30 days' WHERE dedupe_key=$1",[`account-deleted:${sessionUser.id}`]);
+      await c.query("DELETE FROM users WHERE id=$1",[sessionUser.id]);
+    });
     clearSessionCookie(reply);
 
     return { ok: true };
@@ -897,23 +768,12 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
 
     const { token } = parsed.data;
 
-    const userId = await consumeOneTimeToken(token, "verify_email");
-
-    if (!userId) {
-      return reply.code(400).send({
-        error: "Invalid or expired token.",
-      });
-    }
-
-    await pool.query(
-      `UPDATE users
-          SET email_verified_at = now(),
-              updated_at = now()
-        WHERE id = $1`,
-      [userId],
-    );
-
-    return { ok: true };
+    await transaction(async c => {
+      const {user}=await consumeEmailToken(c,parsed.data.token,"verify_email");
+      await c.query("UPDATE users SET email_verified_at=now(),updated_at=now() WHERE id=$1",[user.id]);
+      await securityEvent(user.id,"email_verified",req.ip,c);
+    });
+    return {ok:true};
   });
 
   app.post("/v1/auth/verify-email/resend", async (req, reply) => {
@@ -947,62 +807,24 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       };
     }
 
-    const token = await createOneTimeToken(sessionUser.id, "verify_email");
-
-    await deliverDevOrLogEmail({
-      to: row.email,
-      subject: "Verify your Chalkline email",
-      body: `Verification token (dev only): ${token}`,
+    if (!(await rateLimitOr429(reply,"recoveryIp",req.ip))) return;
+    await transaction(async c => {
+      const current=(await c.query("SELECT email FROM users WHERE id=$1 FOR UPDATE",[sessionUser.id])).rows[0];
+      await issueEmailToken(c,sessionUser.id,"verify_email",current.email);
     });
-
-    return { ok: true };
+    return {ok:true};
   });
 
-  app.post("/v1/auth/password-reset/request", async (req, reply) => {
-    const ip = clientIp(req);
-
-    if (!(await rateLimitOr429(reply, "passwordReset", ip))) return;
-
-    const parsed = PasswordResetRequestInput.safeParse(req.body);
-
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: "Invalid input.",
-      });
-    }
-
-    const { email } = parsed.data;
-
-    const found = await pool.query<{ id: string; email: string }>(
-      `SELECT id, email
-         FROM users
-        WHERE email = $1`,
-      [email],
-    );
-
-    const user = found.rows[0];
-
-    // Always return the same response whether the account exists or not.
-    // This prevents email-account enumeration.
-    if (!user) {
-      return {
-        ok: true,
-        message: "If an account exists for that email, a reset token has been sent.",
-      };
-    }
-
-    const token = await createOneTimeToken(user.id, "reset_password");
-
-    await deliverDevOrLogEmail({
-      to: user.email,
-      subject: "Reset your Chalkline password",
-      body: `Password reset token (dev only): ${token}`,
+  app.post("/v1/auth/password-reset/request", async (req,reply) => {
+    const parsed=PasswordResetRequestInput.safeParse(req.body);
+    if(!parsed.success) return reply.code(400).send({error:"Invalid input."});
+    const {email,captchaToken}=parsed.data;
+    if(!(await rateLimitOr429(reply,"recoveryIp",req.ip)) || !(await rateLimitOr429(reply,"passwordReset",email))) return;
+    await transaction(async c => {
+      const users=(await c.query("SELECT * FROM users WHERE (email=$1 OR (recovery_email=$1 AND recovery_verified_at IS NOT NULL)) AND suspended_at IS NULL ORDER BY id LIMIT 5 FOR UPDATE",[email])).rows;
+      for(const user of users) await issueEmailToken(c,user.id,"reset_password",email,user.email.toLowerCase()===email?"primary":"recovery");
     });
-
-    return {
-      ok: true,
-      message: "If an account exists for that email, a reset token has been sent.",
-    };
+    return {ok:true,message:"If an account matches, a recovery link will be sent."};
   });
 
   app.post("/v1/auth/password-reset/confirm", async (req, reply) => {
@@ -1018,28 +840,29 @@ const verifyToken = await createOneTimeToken(userId, "verify_email");
       });
     }
 
-    const userId = await consumeOneTimeToken(parsed.data.token, "reset_password");
-
-    if (!userId) {
-      return reply.code(400).send({
-        error: "Invalid or expired token.",
-      });
-    }
-
     const passwordHash = await hashPassword(parsed.data.password);
-
-    await pool.query(
-      `UPDATE users
-          SET password_hash = $2,
-              failed_login_count = 0,
-              locked_until = NULL,
-              updated_at = now()
-        WHERE id = $1`,
-      [userId, passwordHash],
-    );
-
-    // A password reset invalidates every existing session.
-    await destroyAllSessions(userId);
+    const reset = await transaction(async (client) => {
+      const {token,user}=await consumeEmailToken(client,parsed.data.token,"reset_password");
+      const userId=user.id;
+      await client.query("UPDATE users SET auth_epoch=auth_epoch+1,password_hash=$2,email_verified_at=CASE WHEN $3='primary' THEN coalesce(email_verified_at,now()) ELSE email_verified_at END,failed_login_count=0,locked_until=NULL,updated_at=now() WHERE id=$1",[userId,passwordHash,token.channel]);
+      await client.query("UPDATE email_tokens SET used_at=now() WHERE user_id=$1 AND purpose IN ('reset_password','change_email') AND used_at IS NULL",[userId]);
+      await client.query("DELETE FROM sessions WHERE user_id=$1", [userId]);
+      await client.query(
+        "UPDATE trusted_devices SET revoked_at=now() WHERE user_id=$1",
+        [userId],
+      );
+      await client.query("DELETE FROM recovery_codes WHERE user_id=$1", [
+        userId,
+      ]);
+      await client.query(
+        "UPDATE device_challenges SET status='denied' WHERE user_id=$1 AND status IN ('pending','approved')",
+        [userId],
+      );
+      await securityEvent(userId, "password_reset", req.ip, client);
+      return true;
+    });
+    if (!reset)
+      return reply.code(400).send({ error: "Invalid or expired token." });
 
     return { ok: true };
   });

@@ -1,10 +1,12 @@
+import { issueEmailToken } from "./tokens.js";
+import { transaction } from "./transactions.js";
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config, isProd } from "./config.js";
 import { pool } from "./db.js";
 
 export const SESSION_COOKIE = "chalkline_session";
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 export function hashToken(raw: Buffer | string): Buffer {
   return createHash("sha256").update(raw).digest();
@@ -12,15 +14,34 @@ export function hashToken(raw: Buffer | string): Buffer {
 
 export async function createSession(
   userId: string,
-  meta: { ip?: string; userAgent?: string },
+  meta: {
+    ip?: string;
+    userAgent?: string;
+    deviceId?: string;
+    authEpoch?: number;
+    authMethod?: "password" | "passkey";
+  },
 ): Promise<string> {
   const raw = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await pool.query(
-    `INSERT INTO sessions (user_id, token_hash, expires_at, ip, user_agent)
-     VALUES ($1, $2, $3, $4::inet, $5)`,
-    [userId, hashToken(raw), expiresAt, meta.ip ?? null, meta.userAgent ?? null],
+  const inserted = await pool.query(
+    `INSERT INTO sessions (user_id, token_hash, expires_at, ip, user_agent, device_id, auth_epoch,idle_seconds,auth_method)
+     SELECT id, $2, now()+(CASE WHEN $6::uuid IS NULL THEN 1 ELSE session_days END * interval '1 day'), $4::inet, $5, $6, auth_epoch,
+       CASE WHEN $6::uuid IS NULL THEN 43200 ELSE least(session_days,$3::int)*86400 END,$8 FROM users WHERE id=$1 AND suspended_at IS NULL AND ($7::int IS NULL OR auth_epoch=$7)`,
+    [
+      userId,
+      hashToken(raw),
+      config.SESSION_IDLE_MAX_DAYS,
+      meta.ip ?? null,
+      meta.userAgent?.slice(0, 200) ?? null,
+      meta.deviceId ?? null,
+      meta.authEpoch ?? null,
+      meta.authMethod ?? "password",
+    ],
   );
+  if (!inserted.rowCount)
+    throw Object.assign(new Error("Credentials changed. Sign in again."), {
+      statusCode: 401,
+    });
   return raw;
 }
 
@@ -43,42 +64,50 @@ export type UserRole = "user" | "admin";
 export type SessionUser = {
   id: string;
   sessionId: string;
+  deviceId: string | null;
   reauthenticatedAt: Date;
   role: UserRole;
+  authMethod: "password" | "passkey";
 };
 
-export async function readSessionUser(req: FastifyRequest): Promise<SessionUser | null> {
+export async function readSessionUser(
+  req: FastifyRequest,
+): Promise<SessionUser | null> {
   const raw = req.cookies[SESSION_COOKIE];
   if (!raw) return null;
   const result = await pool.query<{
-  id: string;
-  session_id: string;
-  reauthenticated_at: Date;
-  role: UserRole;
-}>(
-    `SELECT u.id, s.id AS session_id, s.reauthenticated_at, u.role
+    id: string;
+    session_id: string;
+    device_id: string | null;
+    reauthenticated_at: Date;
+    role: UserRole;
+    auth_method: "password" | "passkey";
+  }>(
+    `SELECT u.id, s.id AS session_id, s.reauthenticated_at, s.device_id, u.role, s.auth_method
        FROM sessions s
        JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1
-        AND s.expires_at > now()`,
+        AND s.expires_at > now() AND s.auth_epoch=u.auth_epoch AND u.suspended_at IS NULL AND s.last_active_at + s.idle_seconds * interval '1 second' > now()
+        AND (s.device_id IS NULL OR EXISTS(SELECT 1 FROM trusted_devices d WHERE d.id=s.device_id AND d.user_id=s.user_id AND d.revoked_at IS NULL AND d.expires_at>now()))`,
     [hashToken(raw)],
   );
   const row = result.rows[0];
   if (!row) return null;
-
+  await pool.query("UPDATE sessions SET last_active_at=now() WHERE id=$1 AND last_active_at<now()-interval '5 minutes'",[row.session_id]);
   return {
     id: row.id,
     sessionId: row.session_id,
+    deviceId: row.device_id,
     reauthenticatedAt: row.reauthenticated_at,
     role: row.role as UserRole,
+    authMethod: row.auth_method,
   };
 }
 
 export async function destroySession(rawToken: string): Promise<void> {
-  await pool.query(
-    `DELETE FROM sessions WHERE token_hash = $1`,
-    [hashToken(rawToken)],
-  );
+  await pool.query(`DELETE FROM sessions WHERE token_hash = $1`, [
+    hashToken(rawToken),
+  ]);
 }
 
 export async function markSessionReauthenticated(
@@ -137,67 +166,34 @@ export async function listSessions(userId: string): Promise<SessionSummary[]> {
 // Deletes one session, scoped to the owning user so you can't revoke a
 // session id that isn't yours just by guessing/enumerating uuids. Returns
 // whether a row was actually deleted.
-export async function destroySessionById(userId: string, sessionId: string): Promise<boolean> {
-  const result = await pool.query(`DELETE FROM sessions WHERE id = $1 AND user_id = $2`, [sessionId, userId]);
+export async function destroySessionById(
+  userId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `DELETE FROM sessions WHERE id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
   return (result.rowCount ?? 0) > 0;
 }
 
 // Signs out every session for a user except the one making the request —
 // the "log out of all other devices" action.
-export async function destroyOtherSessions(userId: string, keepSessionId: string): Promise<number> {
-  const result = await pool.query(`DELETE FROM sessions WHERE user_id = $1 AND id != $2`, [userId, keepSessionId]);
+export async function destroyOtherSessions(
+  userId: string,
+  keepSessionId: string,
+): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM sessions WHERE user_id = $1 AND id != $2`,
+    [userId, keepSessionId],
+  );
   return result.rowCount ?? 0;
 }
 
-export async function createOneTimeToken(
-  userId: string,
-  purpose: "verify_email" | "reset_password",
-): Promise<string> {
-  const raw = randomBytes(32).toString("base64url");
-  const ttlMs =
-    purpose === "reset_password"
-      ? 30 * 60 * 1000
-      : 24 * 60 * 60 * 1000;
-
-  // Only the newest token for a given purpose remains valid.
-  // This prevents old reset/verification links from remaining usable
-  // after a newer one has been issued.
-  await pool.query(
-    `UPDATE email_tokens
-        SET used_at = now()
-      WHERE user_id = $1
-        AND purpose = $2
-        AND used_at IS NULL`,
-    [userId, purpose],
-  );
-
-  await pool.query(
-    `INSERT INTO email_tokens (user_id, purpose, token_hash, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [
-      userId,
-      purpose,
-      hashToken(raw),
-      new Date(Date.now() + ttlMs),
-    ],
-  );
-
-  return raw;
-}
-
-export async function consumeOneTimeToken(
-  raw: string,
-  purpose: "verify_email" | "reset_password",
-): Promise<string | null> {
-  const result = await pool.query<{ user_id: string; id: string }>(
-    `UPDATE email_tokens
-        SET used_at = now()
-      WHERE token_hash = $1
-        AND purpose = $2
-        AND used_at IS NULL
-        AND expires_at > now()
-      RETURNING user_id, id`,
-    [hashToken(raw), purpose],
-  );
-  return result.rows[0]?.user_id ?? null;
+export async function createOneTimeToken(userId: string,purpose: "verify_email"|"reset_password",expectedEmail?:string):Promise<string> {
+ return transaction(async c=> {
+  const user=(await c.query("SELECT email FROM users WHERE id=$1 FOR UPDATE",[userId])).rows[0];
+  if(!user || (expectedEmail && user.email.toLowerCase()!==expectedEmail.toLowerCase())) throw new Error("Account changed.");
+  return issueEmailToken(c,userId,purpose,user.email);
+ });
 }

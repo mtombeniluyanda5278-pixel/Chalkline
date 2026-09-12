@@ -1,3 +1,7 @@
+import { transaction } from "./transactions.js";
+import { failure } from "./http.js";
+import { completeSignIn } from "./devices.js";
+import { securityEvent } from "./security.js";
 import type { FastifyInstance } from "fastify";
 import {
   generateAuthenticationOptions,
@@ -42,7 +46,10 @@ const LOGIN_CHALLENGE_COOKIE = "chalkline_webauthn";
 
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 
-export async function putChallenge(key: string, challenge: string): Promise<void> {
+export async function putChallenge(
+  key: string,
+  challenge: string,
+): Promise<void> {
   if (redis.status !== "ready") {
     await redis.connect();
   }
@@ -120,11 +127,11 @@ export async function registerWebAuthnRoutes(
       })),
       authenticatorSelection: {
         residentKey: "preferred",
-        userVerification: "preferred",
+        userVerification: "required",
       },
     });
 
-    await putChallenge(`reg:${sessionUser.id}`, options.challenge);
+    await putChallenge(`reg:${sessionUser.sessionId}`, options.challenge);
 
     return options;
   });
@@ -147,15 +154,15 @@ export async function registerWebAuthnRoutes(
     // is the operation that actually creates the durable credential.
     if (!(await requireRecentAuth(sessionUser, reply))) return;
 
-    const expectedChallenge = await takeChallenge(`reg:${sessionUser.id}`);
+    const expectedChallenge = await takeChallenge(
+      `reg:${sessionUser.sessionId}`,
+    );
 
     if (!expectedChallenge) {
-      return reply
-        .code(400)
-        .send({ error: "Challenge expired. Start again." });
+      return reply.code(400).send({ error: "Challenge expired. Start again." });
     }
 
-     const parsedBody = WebAuthnRegistrationResponseSchema.safeParse(req.body);
+    const parsedBody = WebAuthnRegistrationResponseSchema.safeParse(req.body);
 
     if (!parsedBody.success) {
       return reply.code(400).send({
@@ -173,9 +180,7 @@ export async function registerWebAuthnRoutes(
       const trimmed = body.deviceName.trim();
 
       if (trimmed.length > 100) {
-        return reply
-          .code(400)
-          .send({ error: "Device name is too long." });
+        return reply.code(400).send({ error: "Device name is too long." });
       }
 
       deviceName = trimmed || null;
@@ -186,12 +191,11 @@ export async function registerWebAuthnRoutes(
       expectedChallenge,
       expectedOrigin: config.WEBAUTHN_ORIGIN,
       expectedRPID: config.WEBAUTHN_RP_ID,
+      requireUserVerification: true,
     });
 
     if (!verification.verified || !verification.registrationInfo) {
-      return reply
-        .code(400)
-        .send({ error: "Passkey could not be verified." });
+      return reply.code(400).send({ error: "Passkey could not be verified." });
     }
 
     const info = verification.registrationInfo;
@@ -211,8 +215,7 @@ export async function registerWebAuthnRoutes(
       );
     } catch (error: unknown) {
       // credential_id is UNIQUE, so don't expose database details to clients.
-      const message =
-        error instanceof Error ? error.message.toLowerCase() : "";
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
 
       if (
         message.includes("duplicate") ||
@@ -227,6 +230,7 @@ export async function registerWebAuthnRoutes(
       throw error;
     }
 
+    await securityEvent(sessionUser.id, "passkey_added", req.ip);
     return { ok: true };
   });
 
@@ -278,44 +282,42 @@ export async function registerWebAuthnRoutes(
 
     const { id } = req.params as { id: string };
 
-    const userRow = await pool.query<{
-      password_hash: string | null;
-    }>(
-      `SELECT password_hash
-         FROM users
-        WHERE id = $1`,
-      [sessionUser.id],
-    );
-
-    const hasPassword = Boolean(userRow.rows[0]?.password_hash);
-
-    if (!hasPassword) {
-      const count = await pool.query<{ count: string }>(
-        `SELECT count(*)::text
-           FROM webauthn_credentials
-          WHERE user_id = $1`,
+    const authEpoch = await transaction(async (c) => {
+      const user = (
+        await c.query(
+          "SELECT password_hash FROM users WHERE id=$1 FOR UPDATE",
+          [sessionUser.id],
+        )
+      ).rows[0];
+      if (!user) throw failure(404, "Account not found.");
+      if (!user.password_hash) {
+        const count = await c.query(
+          "SELECT count(*) FROM webauthn_credentials WHERE user_id=$1",
+          [sessionUser.id],
+        );
+        if (Number(count.rows[0].count) <= 1)
+          throw failure(400, "Cannot remove your only sign-in method.");
+      }
+      const result = await c.query(
+        "DELETE FROM webauthn_credentials WHERE id=$1 AND user_id=$2",
+        [id, sessionUser.id],
+      );
+      if (!result.rowCount) throw failure(404, "Passkey not found.");
+      const changed = await c.query(
+        "UPDATE users SET auth_epoch=auth_epoch+1 WHERE id=$1 RETURNING auth_epoch",
         [sessionUser.id],
       );
-
-      if (Number(count.rows[0]?.count ?? "0") <= 1) {
-        return reply.code(400).send({
-          error:
-            "Cannot remove your only sign-in method. Set a password first or add another passkey.",
-        });
-      }
-    }
-
-    const result = await pool.query(
-      `DELETE FROM webauthn_credentials
-        WHERE id = $1
-          AND user_id = $2`,
-      [id, sessionUser.id],
-    );
-
-    if ((result.rowCount ?? 0) === 0) {
-      return reply.code(404).send({ error: "Passkey not found." });
-    }
-
+      await c.query("DELETE FROM sessions WHERE user_id=$1", [sessionUser.id]);
+      await securityEvent(sessionUser.id, "passkey_removed", req.ip, c);
+      return changed.rows[0].auth_epoch as number;
+    });
+    const session = await createSession(sessionUser.id, {
+      ip: req.ip,
+      userAgent: req.headers["user-agent"],
+      deviceId: sessionUser.deviceId ?? undefined,
+      authEpoch,
+    });
+    setSessionCookie(reply, session);
     return { ok: true };
   });
 
@@ -334,7 +336,7 @@ export async function registerWebAuthnRoutes(
 
     const options = await generateAuthenticationOptions({
       rpID: config.WEBAUTHN_RP_ID,
-      userVerification: "preferred",
+      userVerification: "required",
     });
 
     await putChallenge(`auth:${options.challenge}`, options.challenge);
@@ -366,9 +368,7 @@ export async function registerWebAuthnRoutes(
     const cookieChallenge = req.cookies[LOGIN_CHALLENGE_COOKIE];
 
     if (!cookieChallenge) {
-      return reply
-        .code(400)
-        .send({ error: "Challenge expired. Start again." });
+      return reply.code(400).send({ error: "Challenge expired. Start again." });
     }
 
     const stored = await takeChallenge(`auth:${cookieChallenge}`);
@@ -376,20 +376,18 @@ export async function registerWebAuthnRoutes(
     reply.clearCookie(LOGIN_CHALLENGE_COOKIE, { path: "/" });
 
     if (!stored) {
-      return reply
-        .code(400)
-        .send({ error: "Challenge expired. Start again." });
+      return reply.code(400).send({ error: "Challenge expired. Start again." });
     }
 
-     const parsedBody = WebAuthnAuthenticationResponseSchema.safeParse(req.body);
+    const parsedBody = WebAuthnAuthenticationResponseSchema.safeParse(req.body);
 
-if (!parsedBody.success) {
-  return reply.code(401).send({
-    error: "Passkey sign-in failed.",
-  });
-}
+    if (!parsedBody.success) {
+      return reply.code(401).send({
+        error: "Passkey sign-in failed.",
+      });
+    }
 
-const body = parsedBody.data as AuthenticationResponseJSON;
+    const body = parsedBody.data as AuthenticationResponseJSON;
 
     let credId: Buffer;
 
@@ -401,11 +399,12 @@ const body = parsedBody.data as AuthenticationResponseJSON;
 
     const cred = await pool.query<{
       user_id: string;
+      auth_epoch: number;
       public_key: Buffer;
       counter: string;
     }>(
-      `SELECT user_id, public_key, counter::text
-         FROM webauthn_credentials
+      `SELECT w.user_id, u.auth_epoch, w.public_key, w.counter::text
+         FROM webauthn_credentials w JOIN users u ON u.id=w.user_id
         WHERE credential_id = $1`,
       [credId],
     );
@@ -421,6 +420,7 @@ const body = parsedBody.data as AuthenticationResponseJSON;
       expectedChallenge: stored,
       expectedOrigin: config.WEBAUTHN_ORIGIN,
       expectedRPID: config.WEBAUTHN_RP_ID,
+      requireUserVerification: true,
       credential: {
         id: body.id,
         publicKey: new Uint8Array(row.public_key),
@@ -433,29 +433,20 @@ const body = parsedBody.data as AuthenticationResponseJSON;
     }
 
     const counterUpdate = await pool.query(
-  `UPDATE webauthn_credentials
+      `UPDATE webauthn_credentials
       SET counter = $2
     WHERE credential_id = $1
       AND counter = $3`,
-  [
-    credId,
-    verification.authenticationInfo.newCounter,
-    Number(row.counter),
-  ],
-);
+      [credId, verification.authenticationInfo.newCounter, Number(row.counter)],
+    );
 
-if ((counterUpdate.rowCount ?? 0) !== 1) {
-  return reply.code(401).send({
-    error: "Passkey sign-in failed.",
-  });
-}
+    if ((counterUpdate.rowCount ?? 0) !== 1) {
+      return reply.code(401).send({
+        error: "Passkey sign-in failed.",
+      });
+    }
 
-    const session = await createSession(row.user_id, {
-      ip,
-      userAgent: req.headers["user-agent"],
-    });
-
-    setSessionCookie(reply, session);
+    await completeSignIn(req, reply, row.user_id, "passkey", row.auth_epoch);
 
     return { ok: true };
   });
