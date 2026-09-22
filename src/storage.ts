@@ -30,8 +30,11 @@ export function storageConfigured() {
 let instance: ObjectStore | undefined;
 export function objectStore(): ObjectStore {
   if (instance) return instance;
+  // expose: this states a deployment fact and leaks nothing, so it reaches the
+  // user instead of the generic 5xx text. Without it the caller is told only
+  // "Something went wrong." for a condition the server has already identified.
   if (!storageConfigured())
-    throw failure(503, "File storage is not configured.");
+    throw failure(503, "File storage is not configured.", { expose: true });
   const client = new S3Client({
     endpoint: config.STORAGE_ENDPOINT,
     region: config.STORAGE_REGION,

@@ -155,4 +155,53 @@ export async function prepareDatabase(env) {
   );
   if (configured.status !== 0)
     throw new Error("Plan configuration failed after migrations.");
+  await ensureBucket(env);
+}
+
+// Creates the local MinIO bucket with versioning on. objectStore().delete()
+// lists and removes every version of a key, so an unversioned bucket would
+// leave deleted files in place. Skipped when storage is not configured.
+async function ensureBucket(env) {
+  if (!env.STORAGE_ENDPOINT || !env.STORAGE_BUCKET) return;
+  const { S3Client, CreateBucketCommand, PutBucketVersioningCommand } =
+    await import("@aws-sdk/client-s3");
+  const client = new S3Client({
+    endpoint: env.STORAGE_ENDPOINT,
+    region: env.STORAGE_REGION,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: env.STORAGE_ACCESS_KEY_ID,
+      secretAccessKey: env.STORAGE_SECRET_ACCESS_KEY,
+    },
+  });
+  try {
+    for (let n = 0; ; n++) {
+      try {
+        await client.send(
+          new CreateBucketCommand({ Bucket: env.STORAGE_BUCKET }),
+        );
+        break;
+      } catch (error) {
+        const name = error?.name ?? "";
+        if (
+          name === "BucketAlreadyOwnedByYou" ||
+          name === "BucketAlreadyExists"
+        )
+          break;
+        if (n >= 40)
+          throw new Error(
+            "Local object storage unavailable. Run docker compose up -d.",
+          );
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+    await client.send(
+      new PutBucketVersioningCommand({
+        Bucket: env.STORAGE_BUCKET,
+        VersioningConfiguration: { Status: "Enabled" },
+      }),
+    );
+  } finally {
+    client.destroy();
+  }
 }

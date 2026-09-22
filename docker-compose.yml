@@ -43,6 +43,40 @@ services:
     volumes:
       - local_redis:/data
       - ./.local:/config:ro
+  # S3-compatible storage for local development. Versioning is enabled below
+  # because objectStore().delete() purges every version of a key explicitly;
+  # without it, deleted files would linger.
+  storage:
+    # quay.io, not Docker Hub: MinIO publishes no `latest` tag there.
+    image: quay.io/minio/minio:latest
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    # entrypoint, not command: the image's own entrypoint prepends `minio`.
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        'export MINIO_ROOT_PASSWORD="$$(cat /config/storage-password)"; exec minio server /data --console-address ":59001"',
+      ]
+    environment:
+      MINIO_ROOT_USER: chixlocal
+    ports:
+      - "127.0.0.1:59000:9000"
+      - "127.0.0.1:59001:59001"
+    volumes:
+      - local_storage:/data
+      - ./.local:/config:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
 volumes:
   local_postgres:
   local_redis:
+  local_storage:

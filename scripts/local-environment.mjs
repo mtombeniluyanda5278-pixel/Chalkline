@@ -68,11 +68,17 @@ export async function localEnvironment(test = false) {
     WEBAUTHN_ORIGIN: "http://localhost:3000",
     BOT_PROTECTION_PROVIDER: test ? "mock" : "disabled",
     BOT_REQUIRE_REGISTRATION: "false",
-    MALWARE_SCANNER_MODE: "disabled",
-    STORAGE_ENDPOINT: "",
-    STORAGE_BUCKET: "",
-    STORAGE_ACCESS_KEY_ID: "",
-    STORAGE_SECRET_ACCESS_KEY: "",
+    // "disabled" makes every upload 503 before storage is even reached, because
+    // files are never accepted unless they can be scanned. config.ts rejects
+    // "mock" in production, so this cannot escape local use.
+    MALWARE_SCANNER_MODE: "mock",
+    // Local MinIO, never production storage. Tests and development use
+    // separate buckets so a test run cannot delete development uploads.
+    STORAGE_ENDPOINT: "http://127.0.0.1:59000",
+    STORAGE_REGION: "us-east-1",
+    STORAGE_BUCKET: test ? "chalkline-test" : "chalkline-local",
+    STORAGE_ACCESS_KEY_ID: "chixlocal",
+    STORAGE_SECRET_ACCESS_KEY: secrets.storage,
     BREVO_API_KEY: test
       ? ""
       : process.env.BREVO_API_KEY || mail.BREVO_API_KEY || "",

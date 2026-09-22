@@ -44,7 +44,15 @@ before(async () => {
   await connectRedis();
   await pool.query("SELECT 1");
   if (s3) {
-    await s3.send(new CreateBucketCommand({ Bucket: config.STORAGE_BUCKET }));
+    // The bucket survives between runs, so creating it is best-effort; only a
+    // genuine failure should stop the suite.
+    try {
+      await s3.send(new CreateBucketCommand({ Bucket: config.STORAGE_BUCKET }));
+    } catch (error) {
+      const name = (error as { name?: string })?.name ?? "";
+      if (name !== "BucketAlreadyOwnedByYou" && name !== "BucketAlreadyExists")
+        throw error;
+    }
     await s3.send(
       new PutBucketVersioningCommand({
         Bucket: config.STORAGE_BUCKET,
