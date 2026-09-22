@@ -11,14 +11,14 @@
 
   --color-ink: #262019;
   --color-ink-soft: #55503f;
-  --color-ink-muted: #837a63;
+  --color-ink-muted: #68604d;
 
   --color-green: #3d5a48;
   --color-green-dark: #2c4335;
   --color-green-tint: #e7ede8;
 
   --color-tan: #c6b787;
-  --color-tan-dark: #a8975f;
+  --color-tan-dark: #746332;
 
   --color-danger: #9c3b32;
   --color-danger-dark: #7c2e27;
@@ -33,10 +33,12 @@
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
 
-  --radius-sm: 3px;
-  --radius-md: 6px;
+  /* Effective values, previously set by a second :root further down the file
+     that silently overrode the ones declared here. One source of truth. */
+  --radius-sm: 12px;
+  --radius-md: 22px;
 
-  --shadow-card: 0 1px 2px rgba(38, 32, 25, 0.06);
+  --shadow-card: 0 8px 30px #26201906;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -46,7 +48,27 @@
   --space-6: 2rem;
   --space-7: 3rem;
 
-  --max-width: 960px;
+  /* Type scale. There was none: body copy drifted across 0.68, 0.7, 0.78,
+     0.8, 0.82, 0.85, 0.88, 0.9 and 0.95rem, differences too small to read as
+     hierarchy and large enough to read as noise. Five steps, clearly apart. */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+
+  /* Display sizes fluid between phone and desktop. */
+  --display-sm: clamp(1.75rem, 1.2rem + 2vw, 2.25rem);
+  --display-md: clamp(2rem, 1.2rem + 3.2vw, 3.25rem);
+  --display-lg: clamp(2.5rem, 1rem + 6vw, 4.5rem);
+
+  --leading-tight: 1.15;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --measure: 62ch; /* readable line length for prose */
+
+  --max-width: 1160px;
 }
 
 /* ==========================================================================
@@ -194,13 +216,13 @@ a {
 
 .site-nav__greeting {
   color: var(--color-ink-soft);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .site-nav a {
   color: var(--color-ink-soft);
   text-decoration: none;
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .site-nav a:hover {
@@ -290,18 +312,18 @@ a {
 }
 
 .card__head h2 {
-  font-size: 1.25rem;
+  font-size: var(--text-xl);
 }
 
 .card__eyebrow {
   color: var(--color-ink-muted);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   margin: 0 0 var(--space-1);
 }
 
 .card__hint {
   color: var(--color-ink-muted);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .card__divider {
@@ -321,7 +343,7 @@ a {
 
 .status-card__body p:first-child {
   color: var(--color-ink-muted);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   margin-bottom: var(--space-1);
 }
 
@@ -339,7 +361,7 @@ a {
   gap: var(--space-1);
   padding: 0.15rem 0.6rem;
   border-radius: 999px;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   border: 1px solid transparent;
   white-space: nowrap;
 }
@@ -374,7 +396,7 @@ a {
   padding: 0.6rem 1.1rem;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  font-size: 0.95rem;
+  font-size: var(--text-sm);
   cursor: pointer;
   text-decoration: none;
   line-height: 1.2;
@@ -423,7 +445,7 @@ a {
 
 .btn--small {
   padding: 0.4rem 0.8rem;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .btn--full {
@@ -466,21 +488,21 @@ a {
 }
 
 .field label {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--color-ink-soft);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
 .field .field-hint {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   color: var(--color-ink-muted);
 }
 
 .field input,
 .field select {
   font-family: inherit;
-  font-size: 0.95rem;
+  font-size: var(--text-sm);
   padding: 0.55rem 0.7rem;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-sm);
@@ -512,12 +534,12 @@ a {
 
 .checkbox-field label {
   color: var(--color-ink);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .field-error {
   color: var(--color-danger);
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   margin: 0;
 }
 
@@ -527,7 +549,7 @@ a {
   border: 1px solid #e6c9c3;
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .form-success {
@@ -536,7 +558,7 @@ a {
   border: 1px solid #cfdccf;
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 fieldset {
@@ -550,7 +572,7 @@ fieldset {
 
 legend {
   font-family: var(--font-serif);
-  font-size: 1.1rem;
+  font-size: var(--text-lg);
   padding: 0;
   margin-bottom: var(--space-1);
 }
@@ -585,7 +607,7 @@ legend {
 }
 
 .entity-row__title {
-  font-size: 0.95rem;
+  font-size: var(--text-sm);
   color: var(--color-ink);
   display: flex;
   align-items: center;
@@ -593,13 +615,13 @@ legend {
 }
 
 .entity-row__sub {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   color: var(--color-ink-muted);
 }
 
 .empty-note {
   color: var(--color-ink-muted);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 /* ==========================================================================
@@ -619,7 +641,7 @@ legend {
   pointer-events: none;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-sm);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 
@@ -660,12 +682,12 @@ legend {
 }
 
 .confirm-dialog__title {
-  font-size: 1.2rem;
+  font-size: var(--text-xl);
 }
 
 .confirm-dialog__body {
   color: var(--color-ink-soft);
-  font-size: 0.92rem;
+  font-size: var(--text-sm);
 }
 
 .confirm-dialog__extra {
@@ -720,18 +742,12 @@ legend {
   justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
 }
 
-/* Chix workspace: paper, forest green, generous type and quiet motion. */
-:root {
-  --radius-sm: 12px;
-  --radius-md: 22px;
-  --max-width: 1160px;
-  --color-ink-muted: #68604d;
-  --color-tan-dark: #746332;
-  --shadow-card: 0 8px 30px #26201906;
-}
+/* Chix workspace: paper, forest green, generous type and quiet motion.
+   Token overrides that lived here have been folded into the :root at the top
+   of this file. */
 [hidden] {
   display: none !important;
 }
@@ -778,7 +794,7 @@ textarea {
   line-height: 1.15;
 }
 .eyebrow {
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
   letter-spacing: 0.16em;
   font-weight: 650;
   color: var(--color-green);
@@ -790,14 +806,18 @@ textarea {
   align-items: center;
 }
 .card__head .btn {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 .home-hero {
   padding: 5rem 0 3.5rem;
 }
 .home-hero h1 {
   max-width: 850px;
-  font-size: clamp(3.3rem, 7.8vw, 6.6rem);
+  /* Fluid across the whole range. The previous floor of 3.3rem, plus a flat
+     3.7rem below 720px, left the hero at ~59px on a 420px phone: it still fit,
+     but wrapped to three lines and crowded the viewport. The cap is unchanged,
+     so the desktop hero is exactly as it was. */
+  font-size: clamp(2.25rem, 8.5vw, 6.6rem);
   line-height: 1.03;
   letter-spacing: -0.045em;
   margin: 1.4rem 0 2rem;
@@ -808,7 +828,7 @@ textarea {
 }
 .hero-intro {
   max-width: 590px;
-  font-size: 1.12rem;
+  font-size: var(--text-lg);
   line-height: 1.8;
   color: var(--color-ink-soft);
 }
@@ -831,7 +851,7 @@ textarea {
   max-width: 300px;
 }
 .feature-number {
-  font-size: 0.68rem;
+  font-size: var(--text-xs);
   letter-spacing: 0.13em;
   color: var(--color-green);
 }
@@ -848,7 +868,7 @@ textarea {
   margin-top: 0.5rem;
 }
 .home-footer {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: var(--color-ink-muted);
   padding: 1rem 0;
 }
@@ -960,7 +980,7 @@ textarea {
   margin-bottom: 0.5rem;
 }
 .workspace-nav a {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--color-ink-soft);
   padding: 0.6rem 1rem;
   border-radius: 999px;
@@ -991,7 +1011,7 @@ textarea {
   color: #c6d3b7;
 }
 .continue-card p:not(.eyebrow) {
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   color: #d5dfce;
 }
 .continue-card .btn--ghost {
@@ -1022,14 +1042,14 @@ textarea {
   min-width: 0;
 }
 .work-row strong {
-  font-size: 0.95rem;
+  font-size: var(--text-sm);
   font-weight: 550;
   overflow-wrap: anywhere;
 }
 .work-row small {
   display: block;
   margin-top: 0.3rem;
-  font-size: 0.76rem;
+  font-size: var(--text-xs);
   color: var(--color-ink-muted);
 }
 .work-icon {
@@ -1075,11 +1095,11 @@ select[aria-label] {
   padding-block: 1rem;
 }
 .editor-actions .btn {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 .save-status {
   color: var(--color-green);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 .upload-area {
@@ -1159,9 +1179,7 @@ select:focus-visible {
   .home-features p {
     max-width: none;
   }
-  .home-hero h1 {
-    font-size: 3.7rem;
-  }
+  /* The clamp above now covers narrow widths; a flat size here overrode it. */
   .continue-card {
     align-items: start;
     flex-direction: column;
@@ -1266,7 +1284,7 @@ select:focus-visible {
   margin: 0.5rem 0 0.7rem;
 }
 .workspace-home h2 {
-  font-size: 1.25rem;
+  font-size: var(--text-xl);
   margin: 0 0 1rem;
 }
 .workspace-home h3 {
@@ -1960,7 +1978,7 @@ select:focus-visible {
 .lesson-eyebrow {
   display: block;
   color: var(--color-ink-soft);
-  font-size: 0.68rem;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1981,7 +1999,7 @@ select:focus-visible {
   padding-bottom: 0.5rem;
 }
 .lesson-tools .btn {
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   border-radius: 999px;
   border: 1px solid var(--color-surface-border);
   background: var(--lesson-glass);
@@ -2064,14 +2082,14 @@ select:focus-visible {
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-green-tint) 70%, transparent);
   color: var(--color-ink-soft);
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
 }
 .lesson-subject > details {
   margin: 0 1.5rem;
   padding: 0.25rem 0;
   border-top: 1px solid var(--color-surface-border);
   color: var(--color-ink-soft);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
 }
 .lesson-page .grade-choices {
   border-color: var(--color-surface-border);
@@ -2080,7 +2098,7 @@ select:focus-visible {
 }
 .lesson-page .grade-choices legend {
   padding-inline: 0.4rem;
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: var(--color-ink-soft);
 }
 .lesson-page .grade-choices input {
@@ -2145,7 +2163,7 @@ select:focus-visible {
   background: var(--lesson-glass);
   color: var(--color-ink-soft);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .subject-grade-bars label:hover {
   border-color: var(--color-green);
@@ -2329,6 +2347,12 @@ select:focus-visible {
   opacity: 0.55;
   transform: none;
 }
+/* Roving focus target: app.js moves focus to the heading on each route change
+   so screen readers announce it. It is not reachable by Tab, so the ring is
+   noise — it was drawing a box around every page's title. */
+[tabindex="-1"]:focus {
+  outline: none;
+}
 :root body .btn--danger {
   color: #80291f;
 }
@@ -2457,7 +2481,7 @@ select:focus-visible {
 }
 .app-loader__caption {
   color: var(--color-ink-soft);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   text-align: center;
 }
 @keyframes app-loader-travel {
@@ -2511,7 +2535,7 @@ select:focus-visible {
   background: var(--select-tray);
   color: var(--select-ink);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   box-shadow:
     5px 5px 15px var(--select-shadow),
     -5px -5px 15px var(--select-highlight);
@@ -2687,7 +2711,7 @@ select:focus-visible {
 .security-device,
 .security-timeline time {
   color: var(--color-ink-muted);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .security-device {
   overflow-wrap: anywhere;
@@ -2700,7 +2724,7 @@ select:focus-visible {
 .recovery-codes code {
   overflow-wrap: anywhere;
   white-space: normal;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   user-select: all;
 }
 @media (max-width: 650px) {
@@ -2781,7 +2805,7 @@ select:focus-visible {
 .resource-preview__label {
   padding: 0 1rem;
   text-align: center;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .resource-preview__excerpt {
   margin: 0;
@@ -2791,7 +2815,7 @@ select:focus-visible {
   overflow: hidden;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .resource-preview__play {
@@ -2857,7 +2881,7 @@ select:focus-visible {
 }
 .timetable-end {
   align-self: center;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 @media (max-width: 850px) {
   .timetable-period {
