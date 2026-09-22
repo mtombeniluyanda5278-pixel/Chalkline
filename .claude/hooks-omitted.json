@@ -1,0 +1,42 @@
+{
+  "_comment": "Hooks from everything-claude-code that were NOT wired into settings.json, because each one misfires on this specific repo. Paste an entry into the matching settings.json array to enable it.",
+
+  "_1_blocks_npm_run_dev": {
+    "_why_omitted": "Hard-blocks `npm run dev` (exit 1) unless started via tmux. This project's dev entrypoint is `npm run dev` -> scripts/dev.mjs, so it would be unrunnable.",
+    "_goes_in": "PreToolUse",
+    "matcher": "tool == \"Bash\" && tool_input.command matches \"(npm run dev|pnpm( run)? dev|yarn dev|bun run dev)\"",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "node -e \"console.error('[Hook] BLOCKED: Dev server must run in tmux for log access');console.error('[Hook] Use: tmux new-session -d -s dev \\\"npm run dev\\\"');console.error('[Hook] Then: tmux attach -t dev');process.exit(1)\""
+      }
+    ],
+    "description": "Block dev servers outside tmux - ensures you can access logs"
+  },
+
+  "_2_blocks_writing_docs": {
+    "_why_omitted": "Hard-blocks writing any .md/.txt except README/CLAUDE/AGENTS/CONTRIBUTING. This repo keeps real docs in docs/ (DEPLOYMENT.md, ADMIN-OPERATIONS.md, LESSON-PLANS.md, HARDENING-PASS-2.md), all of which would become unwritable.",
+    "_goes_in": "PreToolUse",
+    "matcher": "tool == \"Write\" && tool_input.file_path matches \"\\\\.(md|txt)$\" && !(tool_input.file_path matches \"README\\\\.md|CLAUDE\\\\.md|AGENTS\\\\.md|CONTRIBUTING\\\\.md\")",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "node -e \"const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path||'';if(/\\.(md|txt)$/.test(p)&&!/(README|CLAUDE|AGENTS|CONTRIBUTING)\\.md$/.test(p)){console.error('[Hook] BLOCKED: Unnecessary documentation file creation');console.error('[Hook] File: '+p);console.error('[Hook] Use README.md for documentation instead');process.exit(1)}console.log(d)})\""
+      }
+    ],
+    "description": "Block creation of random .md files - keeps docs consolidated"
+  },
+
+  "_3_full_typecheck_on_every_edit": {
+    "_why_omitted": "Runs a full `npx tsc --noEmit` across the whole project after every single .ts edit. This codebase has ~60 source files and a full typecheck takes a noticeable pause, so it would tax every edit. `npm run typecheck` covers the same ground on demand.",
+    "_goes_in": "PostToolUse",
+    "matcher": "tool == \"Edit\" && tool_input.file_path matches \"\\\\.(ts|tsx)$\"",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "node -e \"const{execSync}=require('child_process');const fs=require('fs');const path=require('path');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path;if(p&&fs.existsSync(p)){let dir=path.dirname(p);while(dir!==path.dirname(dir)&&!fs.existsSync(path.join(dir,'tsconfig.json'))){dir=path.dirname(dir)}if(fs.existsSync(path.join(dir,'tsconfig.json'))){try{const r=execSync('npx tsc --noEmit --pretty false 2>&1',{cwd:dir,encoding:'utf8',stdio:['pipe','pipe','pipe']});const lines=r.split('\\n').filter(l=>l.includes(p)).slice(0,10);if(lines.length)console.error(lines.join('\\n'))}catch(e){const lines=(e.stdout||'').split('\\n').filter(l=>l.includes(p)).slice(0,10);if(lines.length)console.error(lines.join('\\n'))}}}console.log(d)})\""
+      }
+    ],
+    "description": "TypeScript check after editing .ts/.tsx files"
+  }
+}
