@@ -1,4 +1,5 @@
 import { registerVerifiedAccount, verificationToken } from "./testAccounts.js";
+import { decryptMail } from "./mail.js";
 import { randomUUID } from "node:crypto";
 import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -18,6 +19,7 @@ before(async () => {
 });
 
 afterEach(async () => {
+  await clearTestRateLimits();
   if (createdEmails.length === 0) {
     return;
   }
@@ -42,8 +44,6 @@ function validRegistration(overrides: Record<string, unknown> = {}) {
     country: "ZA",
     dateOfBirth: "2000-01-01",
     email: `test-${id}@example.com`,
-    password: "correct horse battery staple",
-    confirmPassword: "correct horse battery staple",
     username: `test.${id.slice(0, 6)}`,
     phone: "+27821234567",
     address: {
@@ -120,41 +120,38 @@ test("registration plus email verification creates a user and session", async ()
 
   assert.equal(dbResult.rowCount, 1);
   assert.ok(dbResult.rows[0].email_verified_at);
-  assert.ok(dbResult.rows[0].password_hash);
+  // Registration is passwordless: accounts must never be created with a hash.
+  assert.equal(dbResult.rows[0].password_hash, null);
 });
 
-test("POST /v1/auth/login authenticates an existing user", async () => {
+test("registration conflicts use the same public response as a fresh registration", async () => {
   const input = validRegistration();
   createdEmails.push(input.email);
 
-  const registerResponse = await registerVerifiedAccount(app, { ...input, trustDevice: true });
-
-  assert.equal(registerResponse.statusCode, 201);
-
-  const response = await app.inject({
+  const fresh = await app.inject({
     method: "POST",
-    url: "/v1/auth/login",
-    headers: {
-      cookie: (Array.isArray(registerResponse.headers["set-cookie"])
-        ? registerResponse.headers["set-cookie"]
-        : [registerResponse.headers["set-cookie"]]
-      )
-        .filter(Boolean)
-        .map((c) => c!.split(";")[0])
-        .join("; "),
-    },
+    url: "/v1/auth/register",
+    payload: input,
+  });
+
+  const conflict = await app.inject({
+    method: "POST",
+    url: "/v1/auth/register",
     payload: {
+      ...validRegistration(),
       email: input.email,
-      password: input.password,
     },
   });
 
-  assert.equal(response.statusCode, 200);
-  assert.equal(response.json().user.email, input.email);
+  assert.equal(fresh.statusCode, 201);
+  assert.equal(conflict.statusCode, 201);
 
-  const cookie = firstSetCookie(response.headers["set-cookie"]);
+  assert.deepEqual(conflict.json(), fresh.json());
 
-  assert.match(cookie, /^chalkline_session=/);
+  assert.equal(
+    JSON.stringify(conflict.json()).includes("already exists"),
+    false,
+  );
 });
 
 test("authenticated GET /v1/me returns the current user", async () => {
@@ -209,4 +206,83 @@ test("POST /v1/auth/logout destroys the current session", async () => {
   });
 
   assert.equal(meResponse.statusCode, 401);
+});
+
+test("signup OTP is required, scoped to its email, single-use and country is optional", async () => {
+  const input = validRegistration();
+  createdEmails.push(input.email);
+  const { country, ...payload } = input;
+  const registered = await app.inject({
+    method: "POST",
+    url: "/v1/auth/register",
+    payload,
+  });
+  assert.equal(registered.statusCode, 201);
+  assert.equal(registered.headers["set-cookie"], undefined);
+  const proof = await verificationToken(input.email);
+  assert.match(proof.code, /^[0-9]{6}$/);
+  const verify = (payload: unknown) =>
+    app.inject({
+      method: "POST",
+      url: "/v1/auth/verify-email",
+      payload: payload as any,
+    });
+  assert.equal(
+    (await verify({ ...proof, email: "missing@example.com" })).statusCode,
+    400,
+  );
+  assert.equal(
+    (await verify({ token: "legacy-token-cannot-complete-signup" })).statusCode,
+    400,
+  );
+  const done = await verify(proof);
+  assert.equal(done.statusCode, 200);
+  assert.ok(done.headers["set-cookie"]);
+  assert.equal((await verify(proof)).statusCode, 400);
+  const user = (
+    await pool.query(
+      "SELECT country,registration_pending,email_verified_at FROM users WHERE email=$1",
+      [input.email],
+    )
+  ).rows[0];
+  assert.equal(user.country, null);
+  assert.equal(user.registration_pending, false);
+  assert.ok(user.email_verified_at);
+});
+
+test("OTP rejects expired codes, limits guesses and resending invalidates the previous code", async () => {
+  const input = validRegistration();
+  createdEmails.push(input.email);
+  await app.inject({
+    method: "POST",
+    url: "/v1/auth/register",
+    payload: input,
+  });
+  const proof = await verificationToken(input.email);
+  const verify = (code: string) =>
+    app.inject({
+      method: "POST",
+      url: "/v1/auth/verify-email",
+      payload: { email: input.email, code },
+    });
+  const wrong = proof.code === "000000" ? "000001" : "000000";
+  for (let i = 0; i < 5; i++)
+    assert.equal((await verify(wrong)).statusCode, 400);
+  assert.equal((await verify(proof.code)).statusCode, 400);
+  const resend = () =>
+    app.inject({
+      method: "POST",
+      url: "/v1/auth/verify-email/resend",
+      payload: { email: input.email },
+    });
+  assert.equal((await resend()).statusCode, 200);
+  const fresh = await verificationToken(input.email);
+  await pool.query(
+    "UPDATE email_tokens SET expires_at=now()-interval '1 second' WHERE user_id=(SELECT id FROM users WHERE email=$1) AND used_at IS NULL",
+    [input.email],
+  );
+  assert.equal((await verify(fresh.code)).statusCode, 400);
+  assert.equal((await resend()).statusCode, 200);
+  const current = await verificationToken(input.email);
+  assert.equal((await verify(current.code)).statusCode, 200);
 });

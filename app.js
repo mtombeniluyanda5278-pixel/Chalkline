@@ -1,8 +1,12 @@
+import { authenticatorCard } from "./authenticator-ui.js";
+import { createLoader } from "./loading.js";
+import { renderLessons, renderTimetables } from "./lessons.js";
 import {
   setupExtras,
   mountBot,
   humanProof,
   renderPreferences,
+  appearanceSettings,
   renderOnboarding,
   renderRecoveryLink,
   renderDiscovery,
@@ -314,7 +318,7 @@ async function apiFetch(path, options) {
   const res = await fetch(API_BASE + path, {
     method: options.method || "GET",
     headers: Object.assign(
-      { "Content-Type": "application/json" },
+      options.body !== undefined ? { "Content-Type": "application/json" } : {},
       options.headers || {},
     ),
     credentials: "same-origin",
@@ -337,12 +341,14 @@ async function apiFetch(path, options) {
       const action = {
         "/v1/auth/login": "login",
         "/v1/auth/register": "register",
+        "/v1/auth/passwordless/register": "register",
+        "/v1/auth/otp/request": "verification_resend",
         "/v1/auth/password-reset/request": "password_reset",
         "/v1/auth/account-discovery/request": "account_discovery",
         "/v1/auth/verify-email/resend": "verification_resend",
         "/v1/devices/recovery/request": "device_recovery",
       }[path];
-      if (!action) throw new ApiError(res.status, data.error, data.code);
+      if (!action) throw new ApiError(data.error, res.status, data.code);
       const captchaToken = await humanProof(action);
       return apiFetch(path, {
         ...options,
@@ -395,7 +401,7 @@ function field(config) {
       type: config.type || "text",
       autocomplete: config.autocomplete,
       required: config.required || undefined,
-      placeholder: config.placeholder || " ",
+      placeholder: config.placeholder,
     },
     config.extraAttrs || {},
   );
@@ -427,11 +433,7 @@ function field(config) {
   }
   wrapperChildren.push(errorEl);
 
-  const wrapperClass = config.checkbox
-    ? "field checkbox-field"
-    : config.tag === "select" || config.type === "date"
-      ? "field"
-      : "field floating-field";
+  const wrapperClass = config.checkbox ? "field checkbox-field" : "field";
   const wrapper = el(
     "div",
     { class: wrapperClass },
@@ -513,12 +515,31 @@ function confirmDialog(opts) {
       const passField = field({
         id: "confirm-dialog-password",
         label: opts.passwordLabel || "Current password",
-        type: "password",
-        autocomplete: "current-password",
+        type: opts.inputType || "password",
+        autocomplete:
+          opts.inputType === "text" ? "one-time-code" : "current-password",
         hint: opts.passwordHint,
+        extraAttrs:
+          opts.inputType === "text"
+            ? { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6 }
+            : {},
       });
       passwordInput = passField.input;
       extraEl.append(passField.wrapper);
+    }
+
+    if (opts.alternativeLabel) {
+      const alternative = el(
+        "button",
+        { type: "button", class: "btn btn--ghost" },
+        opts.alternativeLabel,
+      );
+      alternative.addEventListener("click", () => {
+        dialog.removeEventListener("close", onClose);
+        dialog.close();
+        settle({ confirmed: false, alternative: true });
+      });
+      extraEl.append(alternative);
     }
 
     function settle(result) {
@@ -559,38 +580,82 @@ function confirmDialog(opts) {
   });
 }
 
-/* Re-authentication: some actions (export, revoke session, remove passkey,
-   delete account, add passkey) require a session authenticated within the
-   last 10 minutes. When the API reports REAUTH_REQUIRED we ask for the
-   current password once and retry the original request. */
-async function reauthenticate() {
-  const result = await confirmDialog({
+/* Sensitive actions require recent authentication. Offer a session-bound
+   email code, with password/passkey confirmation as an alternative, then
+   retry the original request. */
+async function reauthenticate(purpose) {
+  const { user } = await apiFetch("/v1/me");
+  const choice = await confirmDialog({
     title: "Confirm it's you",
-    body: "Enter your password, or leave it blank to confirm with a passkey.",
-    confirmLabel: "Continue",
-    requirePassword: true,
-    passwordLabel: "Password",
-    passwordRequired: false,
+    body:
+      purpose === "email_change"
+        ? "Send a one-time code to your current email to verify your email change."
+        : "Send a one-time code to your account email.",
+    confirmLabel: "Email me a code",
+    alternativeLabel: user.hasAuthenticator
+      ? "Use authenticator app"
+      : user.hasPasskey
+        ? "Use passkey"
+        : undefined,
   });
-  if (!result.confirmed) return false;
+  if (choice.alternative) return reauthenticateWithCredential(user);
+  if (!choice.confirmed) return false;
   try {
-    if (!result.password) {
-      const options = await apiFetch("/v1/auth/passkeys/step-up/options", {
-        method: "POST",
+    await apiFetch("/v1/auth/otp/reauth/request", {
+      method: "POST",
+      body: purpose ? { purpose } : {},
+    });
+    const proof = await confirmDialog({
+      title: "Enter your email code",
+      body:
+        purpose === "email_change"
+          ? "Enter the six-digit code sent to your current email to verify your email change. It expires in 10 minutes."
+          : "Enter the six-digit code we emailed you. It expires in 10 minutes.",
+      confirmLabel: "Confirm",
+      requirePassword: true,
+      passwordLabel: "6-digit code",
+      inputType: "text",
+    });
+    if (!proof.confirmed) return false;
+    await apiFetch("/v1/auth/otp/verify", {
+      method: "POST",
+      body: { code: proof.password, reauth: true },
+    });
+    return true;
+  } catch (error) {
+    toast(friendlyError(error), "error");
+    return false;
+  }
+}
+
+async function reauthenticateWithCredential(user) {
+  try {
+    if (user.hasAuthenticator) {
+      const result = await confirmDialog({
+        title: "Confirm it's you",
+        body: "Enter the current six-digit code from your authenticator app.",
+        confirmLabel: "Confirm",
+        requirePassword: true,
+        passwordLabel: "Authenticator code",
+        inputType: "text",
       });
-      const credential = await navigator.credentials.get({
-        publicKey: toRequestOptions(options),
-      });
-      if (!credential) return false;
-      await apiFetch("/v1/auth/passkeys/step-up/verify", {
+      if (!result.confirmed) return false;
+      await apiFetch("/v1/auth/authenticator/step-up", {
         method: "POST",
-        body: authenticationCredentialToJSON(credential),
+        body: { code: result.password.trim() },
       });
       return true;
     }
-    await apiFetch("/v1/auth/reauth", {
+    const options = await apiFetch("/v1/auth/passkeys/step-up/options", {
       method: "POST",
-      body: { password: result.password },
+    });
+    const credential = await navigator.credentials.get({
+      publicKey: toRequestOptions(options),
+    });
+    if (!credential) return false;
+    await apiFetch("/v1/auth/passkeys/step-up/verify", {
+      method: "POST",
+      body: authenticationCredentialToJSON(credential),
     });
     return true;
   } catch (err) {
@@ -740,6 +805,65 @@ async function loginWithPasskey(trustDevice = false) {
   });
 }
 
+function buildPasskeyOffer() {
+  if (!state.user || state.user.hasPasskey || !webauthnSupported()) return null;
+  const message = el("p", { class: "form-error", role: "status" });
+  message.hidden = true;
+  const create = el(
+    "button",
+    { type: "button", class: "btn btn--primary" },
+    "Create a passkey",
+  );
+  const skip = el(
+    "button",
+    { type: "button", class: "btn btn--ghost" },
+    "Not now",
+  );
+  const offer = el("section", { "aria-label": "Set up a passkey" }, [
+    el("h2", {}, "Make your next sign-in easier"),
+    el(
+      "p",
+      {},
+      "Create a passkey to sign in with your fingerprint, face or device PIN instead of entering a code. Your device will guide you through saving it.",
+    ),
+    el(
+      "p",
+      { class: "card__hint" },
+      "Optional — you can also add one later in Account → Security → Passkeys.",
+    ),
+    message,
+    el("div", { class: "btn-row" }, [create, skip]),
+  ]);
+  skip.addEventListener("click", () => offer.remove());
+  create.addEventListener("click", async () => {
+    if (create.disabled) return;
+    create.disabled = true;
+    skip.disabled = true;
+    create.textContent = "Follow your device's prompt…";
+    message.hidden = true;
+    try {
+      await registerPasskey();
+      state.user.hasPasskey = true;
+      clearNode(offer);
+      offer.append(
+        el(
+          "p",
+          { class: "form-success", role: "status" },
+          "Passkey created. Next time, choose Sign in with a passkey.",
+        ),
+      );
+    } catch (error) {
+      message.textContent = error.message || friendlyError(error);
+      message.hidden = false;
+    } finally {
+      create.disabled = false;
+      skip.disabled = false;
+      create.textContent = "Create a passkey";
+    }
+  });
+  return offer;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Formatting helpers                                                     */
 /* ---------------------------------------------------------------------- */
@@ -828,13 +952,13 @@ function renderNav() {
   clearNode(siteNav);
   if (state.user) {
     siteNav.append(
-      el(
-        "span",
-        { class: "site-nav__greeting" },
-        "Your workspace",
-      ),
+      el("span", { class: "site-nav__greeting" }, "Your workspace"),
       el("a", { href: "#/dashboard" }, "Workspace"),
       el("a", { href: "#/account" }, "Account"),
+      el("a", { href: "#/timetables" }, "Timetables"),
+      ...(state.user.role === "admin"
+        ? [el("a", { href: "#/admin" }, "Admin")]
+        : []),
       el(
         "button",
         {
@@ -883,7 +1007,8 @@ const ROUTES = {
   "/": { render: renderHome },
   "/dashboard": { authOnly: true, render: () => renderDashboard() },
   "/notes": { authOnly: true, render: () => renderDocuments("note") },
-  "/lessons": { authOnly: true, render: () => renderDocuments("lesson") },
+  "/lessons": { authOnly: true, render: (params) => renderLessons(params) },
+  "/timetables": { authOnly: true, render: renderTimetables },
   "/templates": { authOnly: true, render: () => renderDocuments("template") },
   "/schedule": { authOnly: true, render: () => renderDashboard(true) },
   "/editor": { authOnly: true, render: renderEditor },
@@ -893,8 +1018,9 @@ const ROUTES = {
   "/devices": { authOnly: true, render: renderDevices },
   "/login": { guestOnly: true, render: renderLogin },
   "/register": { guestOnly: true, render: renderRegister },
-  "/forgot-password": { guestOnly: true, render: renderForgotPassword },
-  "/reset-password": { guestOnly: true, render: renderResetPassword },
+  "/email-code": { render: renderVerifyEmail },
+  "/forgot-password": { guestOnly: true, render: renderLogin },
+  "/reset-password": { render: renderLogin },
   "/verify-email": { render: renderVerifyEmail },
   "/preferences": { authOnly: true, render: renderPreferences },
   "/onboarding": { authOnly: true, render: renderOnboarding },
@@ -925,6 +1051,7 @@ function navigate(path) {
   }
 }
 
+let pendingPasskeyOffer = null;
 let currentHash = location.hash || "#/";
 let rendering = Promise.resolve();
 function renderRoute() {
@@ -959,9 +1086,10 @@ async function renderRouteNow() {
       ["/files", "Files"],
       ["/notes", "Notes"],
       ["/lessons", "Lesson plans"],
-      ["/templates", "Templates"],
       ["/schedule", "Schedule"],
       ["/account", "Account"],
+      ["/timetables", "Timetables"],
+      ...(state.user.role === "admin" ? [["/admin", "Admin"]] : []),
     ];
     viewRoot.append(
       el(
@@ -980,8 +1108,24 @@ async function renderRouteNow() {
       ),
     );
   }
+  const routeLoader = createLoader("Loading page…");
+  const loaderTimer = setTimeout(() => {
+    if (!viewRoot.querySelector(".app-loader")) viewRoot.append(routeLoader);
+  }, 150);
   try {
     await route.render(parsed.params);
+    if (route.authOnly && pendingPasskeyOffer === state.user?.id) {
+      pendingPasskeyOffer = null;
+      const offer = buildPasskeyOffer();
+      if (offer) {
+        offer.classList.add("card");
+        viewRoot.insertBefore(
+          offer,
+          viewRoot.querySelector(".workspace-nav")?.nextSibling ||
+            viewRoot.firstChild,
+        );
+      }
+    }
   } catch (err) {
     if (hasUnsaved()) {
       toast(friendlyError(err), "error");
@@ -994,6 +1138,9 @@ async function renderRouteNow() {
         el("p", {}, friendlyError(err)),
       ]),
     );
+  } finally {
+    clearTimeout(loaderTimer);
+    routeLoader.remove();
   }
 
   const heading = viewRoot.querySelector("h1");
@@ -1047,17 +1194,49 @@ document.addEventListener("DOMContentLoaded", async () => {
     main.setAttribute("tabindex", "-1");
     main.focus();
   });
+  const startupLoader = createLoader("Opening your workspace…");
+  viewRoot.append(startupLoader);
   try {
     await loadSession();
   } catch {
     toast("Account service unavailable. You can still explore Chix.", "error");
   }
+  startupLoader.remove();
   await renderRoute();
 });
 
 /* ---------------------------------------------------------------------- */
 /* View: Sign in                                                          */
 /* ---------------------------------------------------------------------- */
+
+function buildGoogleSignInButton() {
+  const button = el(
+    "button",
+    { type: "button", class: "btn btn--ghost btn--full", hidden: true },
+    "Continue with Google",
+  );
+  apiFetch("/v1/auth/methods")
+    .then((methods) => {
+      button.hidden = !methods.google;
+    })
+    .catch(() => {});
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const result = await apiFetch("/v1/auth/google/start", {
+        method: "POST",
+      });
+      const url = new URL(result.url);
+      if (url.origin !== "https://accounts.google.com")
+        throw new Error("Google sign-in unavailable.");
+      location.assign(url.href);
+    } catch (error) {
+      toast(friendlyError(error), "error");
+      button.disabled = false;
+    }
+  });
+  return button;
+}
 
 async function renderLogin() {
   const fields = {
@@ -1068,46 +1247,122 @@ async function renderLogin() {
       required: true,
       autocomplete: "email",
     }),
-    password: field({
-      id: "login-password",
-      label: "Password",
-      type: "password",
+    code: field({
+      id: "login-authenticator-code",
+      label: "Authenticator code",
+      type: "text",
       required: true,
-      autocomplete: "current-password",
+      autocomplete: "one-time-code",
+      extraAttrs: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6 },
     }),
   };
 
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
 
+  const trust = el("input", { type: "checkbox" });
+  const continueBtn = el(
+    "button",
+    { type: "button", class: "btn btn--ghost btn--full" },
+    "Use an authenticator app",
+  );
+  const codeBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary btn--full" },
+    "Email me a sign-in code",
+  );
+  const backBtn = el(
+    "button",
+    { type: "button", class: "btn btn--ghost btn--small" },
+    "Change email",
+  );
   const submitBtn = el(
     "button",
     { type: "submit", class: "btn btn--primary btn--full" },
     "Sign in",
   );
 
-  const trust = el("input", { type: "checkbox" });
-  const form = el("form", { class: "form", novalidate: true }, [
-    errorBanner,
+  const emailStep = el("form", { class: "form", novalidate: true }, [
     fields.email.wrapper,
-    fields.password.wrapper,
-    el("label", {}, [trust, el("span", {}, "Trust this device")]),
+    codeBtn,
+    continueBtn,
+  ]);
+  emailStep.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (codeBtn.disabled || !fields.email.input.reportValidity()) return;
+    codeBtn.disabled = true;
+    errorBanner.hidden = true;
+    try {
+      await apiFetch("/v1/auth/otp/request", {
+        method: "POST",
+        body: { email: fields.email.input.value.trim() },
+      });
+      state.verificationEmail = fields.email.input.value.trim();
+      navigate("/email-code");
+    } catch (error) {
+      errorBanner.textContent = friendlyError(error);
+      errorBanner.hidden = false;
+    } finally {
+      codeBtn.disabled = false;
+    }
+  });
+  if (parseHash().params.get("google") === "link") {
+    try {
+      const identity = await apiFetch("/v1/auth/google/pending");
+      fields.email.input.value = identity.email || "";
+      errorBanner.textContent =
+        "Confirm your existing account with an emailed code to connect Google.";
+      errorBanner.hidden = false;
+    } catch {
+      /* The email form remains available. */
+    }
+  } else if (parseHash().params.get("google") === "error") {
+    errorBanner.textContent =
+      "Google sign-in did not finish. Try again or use an email code.";
+    errorBanner.hidden = false;
+  }
+
+  const emailSummary = el("p", { class: "login-email-summary" });
+  const authenticatorStep = el("form", { class: "form", novalidate: true }, [
+    emailSummary,
+    backBtn,
+    fields.code.wrapper,
+    el(
+      "p",
+      { class: "card__hint" },
+      "Enter the six-digit code from your connected authenticator app. You can also go back and sign in by email.",
+    ),
     submitBtn,
   ]);
+  authenticatorStep.hidden = true;
 
-  form.addEventListener("submit", async (e) => {
+  continueBtn.addEventListener("click", () => {
+    if (!fields.email.input.reportValidity()) return;
+    emailSummary.textContent = fields.email.input.value.trim();
+    emailStep.hidden = true;
+    authenticatorStep.hidden = false;
+    fields.code.input.focus();
+  });
+
+  backBtn.addEventListener("click", () => {
+    authenticatorStep.hidden = true;
+    emailStep.hidden = false;
+    fields.email.input.focus();
+  });
+
+  authenticatorStep.addEventListener("submit", async (e) => {
     e.preventDefault();
     clearFieldErrors(fields);
     errorBanner.hidden = true;
+    if (submitBtn.disabled || !authenticatorStep.reportValidity()) return;
     submitBtn.disabled = true;
     submitBtn.textContent = "Signing in…";
     try {
-      const loginResult = await apiFetch("/v1/auth/login", {
+      const loginResult = await apiFetch("/v1/auth/authenticator/login", {
         method: "POST",
         body: {
           email: fields.email.input.value.trim(),
-          password: fields.password.input.value,
-          trustDevice: trust.checked,
+          code: fields.code.input.value.trim(),
         },
       });
       if (loginResult.approvalRequired) {
@@ -1116,9 +1371,22 @@ async function renderLogin() {
         return;
       }
       await loadSession();
+      if (!state.user)
+        throw new ApiError(
+          "Sign-in could not be confirmed. Please allow cookies and try again.",
+          401,
+        );
       navigate("/dashboard");
       toast("Welcome back.", "success");
     } catch (err) {
+      if (
+        err instanceof ApiError &&
+        err.code === "EMAIL_VERIFICATION_REQUIRED"
+      ) {
+        state.verificationEmail = fields.email.input.value.trim();
+        navigate("/verify-email");
+        return;
+      }
       if (err instanceof ApiError && err.status === 400 && err.details) {
         applyServerFieldErrors(fields, err.details);
       }
@@ -1130,7 +1398,7 @@ async function renderLogin() {
     }
   });
 
-  const passkeyRow = [];
+  const passkeyRow = [buildGoogleSignInButton()];
   if (webauthnSupported()) {
     const passkeyBtn = el(
       "button",
@@ -1142,6 +1410,11 @@ async function renderLogin() {
       try {
         await loginWithPasskey(trust.checked);
         await loadSession();
+        if (!state.user)
+          throw new ApiError(
+            "Sign-in could not be confirmed. Please allow cookies and try again.",
+            401,
+          );
         navigate("/dashboard");
         toast("Welcome back.", "success");
       } catch (err) {
@@ -1159,9 +1432,12 @@ async function renderLogin() {
         el("h1", {}, "Sign in"),
         el("p", {}, "Welcome back to Chix."),
       ]),
-      el("div", { class: "card" }, [form].concat(passkeyRow)),
+      el(
+        "div",
+        { class: "card" },
+        [errorBanner, emailStep, authenticatorStep].concat(passkeyRow),
+      ),
       el("div", { class: "link-row" }, [
-        el("a", { href: "#/forgot-password" }, "Forgot your password?"),
         el("a", { href: "#/forgot-email" }, "Forgot your email?"),
         el("a", { href: "#/register" }, "Create an account"),
       ]),
@@ -1172,6 +1448,20 @@ async function renderLogin() {
 /* ---------------------------------------------------------------------- */
 /* View: Register                                                         */
 /* ---------------------------------------------------------------------- */
+
+function birthDateValue(value) {
+  const text = value.trim();
+  const parts = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
+  const iso = parts
+    ? `${parts[3]}-${parts[2].padStart(2, "0")}-${parts[1].padStart(2, "0")}`
+    : text;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const date = new Date(`${iso}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === iso
+    ? iso
+    : null;
+}
 
 async function renderRegister() {
   const fields = {
@@ -1187,18 +1477,14 @@ async function renderRegister() {
       required: true,
       autocomplete: "family-name",
     }),
-    country: field({
-      id: "reg-country",
-      label: "Country",
-      tag: "select",
-      required: true,
-    }),
     dateOfBirth: field({
       id: "reg-dob",
       label: "Date of birth",
-      type: "date",
+      type: "text",
       required: true,
       autocomplete: "bday",
+      placeholder: "DD/MM/YYYY",
+      hint: "Day / month / year, for example 12/02/2000 for 12 February 2000.",
     }),
     email: field({
       id: "reg-email",
@@ -1215,22 +1501,6 @@ async function renderRegister() {
       hint: "3–20 characters: lowercase letters, numbers, dots or underscores.",
       extraAttrs: { minlength: 3, maxlength: 20, pattern: "[a-z0-9._]{3,20}" },
     }),
-    password: field({
-      id: "reg-password",
-      label: "Password",
-      type: "password",
-      required: true,
-      autocomplete: "new-password",
-      hint: "At least 12 characters.",
-      extraAttrs: { minlength: 12, maxlength: 72 },
-    }),
-    confirmPassword: field({
-      id: "reg-confirm-password",
-      label: "Confirm password",
-      type: "password",
-      required: true,
-      autocomplete: "new-password",
-    }),
     marketingAnnouncements: field({
       id: "reg-marketing-announcements",
       label: "Send me product announcements",
@@ -1245,8 +1515,19 @@ async function renderRegister() {
     }),
   };
 
-  populateCountrySelect(fields.country.input);
-  const trust = el("input", { type: "checkbox" });
+  if (parseHash().params.get("google") === "profile") {
+    try {
+      const identity = await apiFetch("/v1/auth/google/pending");
+      if (identity.email) {
+        fields.email.input.value = identity.email;
+        fields.email.input.readOnly = true;
+        fields.firstName.input.value = identity.firstName || "";
+        fields.lastName.input.value = identity.lastName || "";
+      }
+    } catch {
+      /* Email registration remains available. */
+    }
+  }
   const bot = el("div", {});
   let readBot = () => "";
 
@@ -1265,17 +1546,10 @@ async function renderRegister() {
       fields.firstName.wrapper,
       fields.lastName.wrapper,
     ]),
-    el("div", { class: "form-row" }, [
-      fields.country.wrapper,
-      fields.dateOfBirth.wrapper,
-    ]),
+    fields.dateOfBirth.wrapper,
     fields.email.wrapper,
     fields.username.wrapper,
-    el("div", { class: "form-row" }, [
-      fields.password.wrapper,
-      fields.confirmPassword.wrapper,
-    ]),
-    el("label", {}, [trust, el("span", {}, "Trust this device")]),
+
     bot,
     fields.marketingAnnouncements.wrapper,
     fields.marketingApps.wrapper,
@@ -1298,6 +1572,15 @@ async function renderRegister() {
     clearFieldErrors(fields);
     errorBanner.hidden = true;
 
+    const dateOfBirth = birthDateValue(fields.dateOfBirth.input.value);
+    if (!dateOfBirth) {
+      setFieldError(
+        fields.dateOfBirth,
+        "Enter a valid date of birth as DD/MM/YYYY, for example 12/02/2000.",
+      );
+      fields.dateOfBirth.input.focus();
+      return;
+    }
     if (!form.reportValidity()) return;
 
     submitBtn.disabled = true;
@@ -1306,37 +1589,33 @@ async function renderRegister() {
     const body = {
       firstName: fields.firstName.input.value.trim(),
       lastName: fields.lastName.input.value.trim(),
-      country: fields.country.input.value,
-      dateOfBirth: fields.dateOfBirth.input.value,
+      dateOfBirth,
       email: fields.email.input.value.trim(),
-      password: fields.password.input.value,
-      confirmPassword: fields.confirmPassword.input.value,
       username: fields.username.input.value.trim().toLowerCase(),
       marketingAnnouncements: fields.marketingAnnouncements.input.checked,
       marketingApps: fields.marketingApps.input.checked,
       timezone:
         Intl.DateTimeFormat().resolvedOptions().timeZone ||
         "Africa/Johannesburg",
-      trustDevice: trust.checked,
       captchaToken: readBot(),
     };
 
     try {
-      const registration = await apiFetch("/v1/auth/register", {
+      const registration = await apiFetch("/v1/auth/passwordless/register", {
         method: "POST",
         body: body,
       });
       if (registration.verificationRequired || registration.signInRequired) {
-        navigate("/login");
-        toast(registration.message);
+        state.verificationEmail = body.email;
+        navigate("/email-code");
+        toast(registration.message || "Enter the code we emailed you.");
         return;
       }
       await loadSession();
+      if (!state.user)
+        throw new Error("Please sign in to confirm your new account.");
       navigate("/onboarding");
-      toast(
-        "Account created. Check your email to verify your address.",
-        "success",
-      );
+      toast("Account created.", "success");
     } catch (err) {
       if (err instanceof ApiError && err.status === 400 && err.details) {
         applyServerFieldErrors(fields, err.details);
@@ -1355,7 +1634,7 @@ async function renderRegister() {
         el("h1", {}, "Create your account"),
         el("p", {}, "A few details and you're set."),
       ]),
-      el("div", { class: "card" }, [form]),
+      el("div", { class: "card" }, [buildGoogleSignInButton(), form]),
       el("div", { class: "link-row" }, [
         el("span", {}, ""),
         el("a", { href: "#/login" }, "Already have an account? Sign in"),
@@ -1368,292 +1647,177 @@ async function renderRegister() {
 /* View: Forgot password                                                  */
 /* ---------------------------------------------------------------------- */
 
-async function renderForgotPassword() {
-  const fields = {
-    email: field({
-      id: "forgot-email",
-      label: "Email",
-      type: "email",
-      required: true,
-      autocomplete: "email",
-    }),
-  };
-
+async function renderVerifyEmail() {
+  const passwordless = parseHash().path === "/email-code";
+  const emailField = field({
+    id: "verify-email",
+    label: "Email",
+    type: "email",
+    required: true,
+    autocomplete: "email",
+  });
+  emailField.input.value = state.verificationEmail || state.user?.email || "";
+  const card = el("div", { class: "card" });
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
-  const successBanner = el("div", { class: "form-success" });
-  successBanner.hidden = true;
+
+  const codeField = field({
+    id: "verify-code",
+    label: "6-digit code",
+    required: true,
+    autocomplete: "one-time-code",
+    extraAttrs: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6 },
+  });
 
   const submitBtn = el(
     "button",
     { type: "submit", class: "btn btn--primary btn--full" },
-    "Send reset link",
+    "Verify",
   );
 
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
-    successBanner,
-    fields.email.wrapper,
+    el("p", {}, "Enter the 6-digit code we emailed you."),
+    emailField.wrapper,
+    codeField.wrapper,
     submitBtn,
   ]);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    clearFieldErrors(fields);
     errorBanner.hidden = true;
+    if (submitBtn.disabled || !form.reportValidity()) return;
     submitBtn.disabled = true;
-    submitBtn.textContent = "Sending…";
+    submitBtn.textContent = "Verifying…";
     try {
-      const data = await apiFetch("/v1/auth/password-reset/request", {
-        method: "POST",
-        body: { email: fields.email.input.value.trim() },
-      });
-      successBanner.textContent =
-        data.message ||
-        "If an account exists for that email, we've sent a reset link.";
-      successBanner.hidden = false;
-      fields.email.input.value = "";
+      const verification = await apiFetch(
+        passwordless ? "/v1/auth/otp/verify" : "/v1/auth/verify-email",
+        {
+          method: "POST",
+          body: {
+            email: emailField.input.value.trim(),
+            code: codeField.input.value.trim(),
+          },
+        },
+      );
+      if (verification.signInRequired) {
+        state.user = null;
+        state.address = null;
+      }
+      heading.textContent = "Signing you in…";
+      clearNode(card);
+      card.append(
+        el(
+          "div",
+          { class: "sign-in-loading", role: "status", "aria-live": "polite" },
+          [
+            el("p", {}, "Getting your workspace ready…"),
+            el("progress", { "aria-label": "Signing you in" }),
+          ],
+        ),
+      );
+      let sessionUnavailable = false;
+      try {
+        await loadSession();
+      } catch {
+        sessionUnavailable = true;
+      }
+      renderNav();
+      const signInRequired = verification.signInRequired || !state.user;
+      if (!signInRequired && !sessionUnavailable) {
+        pendingPasskeyOffer = state.user.id;
+        navigate(
+          passwordless
+            ? verification.newAccount
+              ? "/onboarding"
+              : "/dashboard"
+            : "/account",
+        );
+        return;
+      }
+      heading.textContent = "Verify your email";
+      clearNode(card);
+      card.append(
+        el("p", { class: "form-success" }, "Your email address is verified."),
+        ...(sessionUnavailable
+          ? [
+              el(
+                "p",
+                {},
+                "We couldn't refresh your session. " +
+                  (signInRequired
+                    ? "Please sign in to continue."
+                    : "Continue to retry."),
+              ),
+            ]
+          : signInRequired
+            ? [el("p", {}, "Please sign in to continue.")]
+            : []),
+        el(
+          "a",
+          {
+            class: "btn btn--primary",
+            href: signInRequired
+              ? "#/login"
+              : passwordless
+                ? verification.newAccount
+                  ? "#/onboarding"
+                  : "#/dashboard"
+                : "#/account",
+          },
+          signInRequired ? "Sign in" : "Continue",
+        ),
+      );
     } catch (err) {
       errorBanner.textContent = friendlyError(err);
       errorBanner.hidden = false;
-    } finally {
       submitBtn.disabled = false;
-      submitBtn.textContent = "Send reset link";
+      submitBtn.textContent = "Verify";
     }
   });
 
-  viewRoot.append(
-    el("div", { class: "auth-shell" }, [
-      el("div", { class: "page-head" }, [
-        el("h1", {}, "Reset your password"),
-        el("p", {}, "We'll email you a link to choose a new one."),
-      ]),
-      el("div", { class: "card" }, [form]),
-      el("div", { class: "link-row" }, [
-        el("a", { href: "#/login" }, "Back to sign in"),
-      ]),
-    ]),
-  );
-}
-
-/* ---------------------------------------------------------------------- */
-/* View: Reset password (from emailed link, ?token=...)                   */
-/* ---------------------------------------------------------------------- */
-
-async function renderResetPassword(params) {
-  const token = params.get("token");
-  if (token) history.replaceState(null, "", "#" + parseHash().path);
-
-  if (!token) {
-    viewRoot.append(
-      el("div", { class: "auth-shell" }, [
-        el("div", { class: "page-head" }, [el("h1", {}, "Reset link invalid")]),
-        el("div", { class: "card" }, [
-          el(
-            "p",
-            {},
-            "This link is missing its reset token. Request a new one below.",
-          ),
-          el(
-            "a",
-            { class: "btn btn--primary", href: "#/forgot-password" },
-            "Request a new link",
-          ),
-        ]),
-      ]),
+  const actions = [
+    el(
+      "a",
+      { class: "btn btn--ghost", href: state.user ? "#/account" : "#/login" },
+      "Continue",
+    ),
+  ];
+  {
+    const resendBtn = el(
+      "button",
+      { type: "button", class: "btn btn--primary" },
+      "Resend code",
     );
-    return;
+    resendBtn.addEventListener("click", async () => {
+      if (!emailField.input.reportValidity()) return;
+      resendBtn.disabled = true;
+      try {
+        await apiFetch(
+          passwordless
+            ? "/v1/auth/otp/request"
+            : "/v1/auth/verify-email/resend",
+          { method: "POST", body: { email: emailField.input.value.trim() } },
+        );
+        toast("Verification code sent.", "success");
+      } catch (resendErr) {
+        toast(friendlyError(resendErr), "error");
+      } finally {
+        resendBtn.disabled = false;
+      }
+    });
+    actions.unshift(resendBtn);
   }
 
-  const fields = {
-    password: field({
-      id: "reset-password",
-      label: "New password",
-      type: "password",
-      required: true,
-      autocomplete: "new-password",
-      hint: "At least 12 characters.",
-      extraAttrs: { minlength: 12, maxlength: 72 },
-    }),
-    confirmPassword: field({
-      id: "reset-confirm-password",
-      label: "Confirm new password",
-      type: "password",
-      required: true,
-      autocomplete: "new-password",
-    }),
-  };
-
-  const errorBanner = el("div", { class: "form-error" });
-  errorBanner.hidden = true;
-
-  const submitBtn = el(
-    "button",
-    { type: "submit", class: "btn btn--primary btn--full" },
-    "Set new password",
-  );
-
-  const form = el("form", { class: "form", novalidate: true }, [
-    errorBanner,
-    fields.password.wrapper,
-    fields.confirmPassword.wrapper,
-    submitBtn,
-  ]);
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    clearFieldErrors(fields);
-    errorBanner.hidden = true;
-
-    if (fields.password.input.value !== fields.confirmPassword.input.value) {
-      setFieldError(fields.confirmPassword, "Passwords do not match");
-      return;
-    }
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Updating…";
-    try {
-      await apiFetch("/v1/auth/password-reset/confirm", {
-        method: "POST",
-        body: {
-          token: token,
-          password: fields.password.input.value,
-          confirmPassword: fields.confirmPassword.input.value,
-        },
-      });
-      navigate("/login");
-      toast("Password updated. Please sign in.", "success");
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 400 && err.details) {
-        applyServerFieldErrors(fields, err.details);
-      }
-      errorBanner.textContent = friendlyError(err);
-      errorBanner.hidden = false;
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Set new password";
-    }
-  });
+  card.append(form, el("div", { class: "btn-row" }, actions));
+  const heading = el("h1", {}, "Verify your email");
 
   viewRoot.append(
     el("div", { class: "auth-shell" }, [
-      el("div", { class: "page-head" }, [
-        el("h1", {}, "Choose a new password"),
-      ]),
-      el("div", { class: "card" }, [form]),
-    ]),
-  );
-}
-
-/* ---------------------------------------------------------------------- */
-/* View: Verify email (from emailed link, ?token=...)                     */
-/* ---------------------------------------------------------------------- */
-
-async function renderVerifyEmail(params) {
-  const token = params.get("token");
-  if (token) history.replaceState(null, "", "#" + parseHash().path);
-  const card = el("div", { class: "card" }, [
-    el("p", {}, "Checking your link…"),
-  ]);
-
-  viewRoot.append(
-    el("div", { class: "auth-shell" }, [
-      el("div", { class: "page-head" }, [el("h1", {}, "Verify your email")]),
+      el("div", { class: "page-head" }, [heading]),
       card,
     ]),
   );
-
-  clearNode(card);
-
-  if (!token) {
-    card.append(
-      el("p", {}, "This verification link is missing a token."),
-      el(
-        "a",
-        {
-          class: "btn btn--primary",
-          href: state.user ? "#/account" : "#/login",
-        },
-        "Continue",
-      ),
-    );
-    return;
-  }
-
-  try {
-    const verification = await apiFetch("/v1/auth/verify-email", {
-      method: "POST",
-      body: { token: token },
-    });
-    if (verification.signInRequired) {
-      state.user = null;
-      state.address = null;
-    }
-    let sessionUnavailable = false;
-    try {
-      await loadSession();
-    } catch {
-      // The link has already been consumed. A session read failure must not
-      // turn a completed verification into a request to use the link again.
-      sessionUnavailable = true;
-    }
-    renderNav();
-    const signInRequired = verification.signInRequired || !state.user;
-    card.append(
-      el("p", { class: "form-success" }, "Your email address is verified."),
-      ...(sessionUnavailable
-        ? [el(
-            "p",
-            {},
-            "We couldn't refresh your session. " +
-              (signInRequired
-                ? "Please sign in to continue."
-                : "Continue to retry."),
-          )]
-        : signInRequired
-          ? [el("p", {}, "Please sign in to continue.")]
-          : []),
-      el(
-        "a",
-        {
-          class: "btn btn--primary",
-          href: signInRequired ? "#/login" : "#/account",
-        },
-        signInRequired ? "Sign in" : "Continue",
-      ),
-    );
-  } catch (err) {
-    const actions = [
-      el(
-        "a",
-        { class: "btn btn--ghost", href: state.user ? "#/account" : "#/login" },
-        "Continue",
-      ),
-    ];
-    if (state.user) {
-      const resendBtn = el(
-        "button",
-        { type: "button", class: "btn btn--primary" },
-        "Resend verification email",
-      );
-      resendBtn.addEventListener("click", async () => {
-        resendBtn.disabled = true;
-        try {
-          await apiFetch("/v1/auth/verify-email/resend", { method: "POST" });
-          toast("Verification email sent.", "success");
-        } catch (resendErr) {
-          toast(friendlyError(resendErr), "error");
-        } finally {
-          resendBtn.disabled = false;
-        }
-      });
-      actions.unshift(resendBtn);
-    }
-    card.append(
-      el("p", { class: "form-error" }, friendlyError(err)),
-      el("div", { class: "btn-row" }, actions),
-    );
-  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1663,22 +1827,81 @@ async function renderVerifyEmail(params) {
 async function renderAccount() {
   await loadSession();
   if (!state.user) return;
-  const user=state.user;
-  const panel=(title,content)=>el("details",{class:"account-panel"},[el("summary",{},title),content]);
-  const section=(id,title,content)=>el("section",{class:"account-section","aria-labelledby":id},[el("h2",{id},title),...content]);
-  viewRoot.append(el("div",{class:"page-head"},[el("h1",{},"Account"),el("p",{},"Your profile, security and personal preferences.")]),
-    el("nav",{class:"account-sections","aria-label":"Account sections"},["Profile","Security","Preferences","Danger zone"].map(label=>el("a",{href:"#account-"+label.toLowerCase().replaceAll(" ","-"),onclick:e=>{e.preventDefault();document.getElementById("account-"+label.toLowerCase().replaceAll(" ","-")).scrollIntoView({behavior:"auto"});}},label))),
-    section("account-profile","Profile",[
-      el("p",{},user.email),buildStatusCard(user),
-      panel("Name and profile",buildProfileCard(user)),
-      panel("Email address",buildEmailCard(user)),panel("Username",buildUsernameCard(user)),
+  const user = state.user;
+  const panel = (title, content) =>
+    el("details", { class: "account-panel" }, [
+      el("summary", {}, title),
+      content,
+    ]);
+  const section = (id, title, content) =>
+    el("section", { class: "account-section", "aria-labelledby": id }, [
+      el("h2", { id }, title),
+      ...content,
+    ]);
+  viewRoot.append(
+    el("div", { class: "page-head" }, [
+      el("h1", {}, "Account"),
+      el("p", {}, "Your profile, security and personal preferences."),
     ]),
-    section("account-security","Security",[
-      panel("Password",buildPasswordCard()),panel("Passkeys",buildPasskeysCard()),panel("Active sessions",buildSessionsCard()),
-      el("div",{class:"btn-row"},[el("a",{href:"#/preferences",class:"btn btn--ghost"},"Recovery email"),el("a",{href:"#/devices",class:"btn btn--ghost"},"Trusted devices & recovery codes")]),
+    el(
+      "nav",
+      { class: "account-sections", "aria-label": "Account sections" },
+      ["Profile", "Security", "Preferences", "Danger zone"].map((label) =>
+        el(
+          "a",
+          {
+            href: "#account-" + label.toLowerCase().replaceAll(" ", "-"),
+            onclick: (e) => {
+              e.preventDefault();
+              document
+                .getElementById(
+                  "account-" + label.toLowerCase().replaceAll(" ", "-"),
+                )
+                .scrollIntoView({ behavior: "auto" });
+            },
+          },
+          label,
+        ),
+      ),
+    ),
+    section("account-profile", "Profile", [
+      el("p", {}, user.email),
+      buildStatusCard(user),
+      panel("Name and profile", buildProfileCard(user)),
+      panel("Email address", buildEmailCard(user)),
+      panel("Username", buildUsernameCard(user)),
     ]),
-    section("account-preferences","Preferences",[el("p",{},"Manage your timezone, session duration and personal touches."),el("a",{href:"#/preferences",class:"btn btn--ghost"},"Edit account preferences")]),
-    section("account-danger-zone","Danger zone",[buildDataAccountCard(user)]),
+    section("account-security", "Security", [
+      panel("Authenticator app", buildAuthenticatorCard()),
+      panel("Passkeys", buildPasskeysCard()),
+      panel("Active sessions", buildSessionsCard()),
+      el("div", { class: "btn-row" }, [
+        el(
+          "a",
+          { href: "#/preferences", class: "btn btn--ghost" },
+          "Recovery email",
+        ),
+        el(
+          "a",
+          { href: "#/devices", class: "btn btn--ghost" },
+          "Trusted devices & recovery codes",
+        ),
+      ]),
+    ]),
+    section("account-preferences", "Preferences", [
+      appearanceSettings(),
+      el(
+        "p",
+        {},
+        "Manage your timezone, session duration and personal touches.",
+      ),
+      el(
+        "a",
+        { href: "#/preferences", class: "btn btn--ghost" },
+        "Edit account preferences",
+      ),
+    ]),
+    section("account-danger-zone", "Danger zone", [buildDataAccountCard(user)]),
   );
 }
 
@@ -1829,13 +2052,6 @@ function buildEmailCard(user) {
       required: true,
       autocomplete: "email",
     }),
-    currentPassword: field({
-      id: "email-current-password",
-      label: "Current password",
-      type: "password",
-      required: true,
-      autocomplete: "current-password",
-    }),
   };
 
   const errorBanner = el("div", { class: "form-error" });
@@ -1849,7 +2065,6 @@ function buildEmailCard(user) {
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
     fields.email.wrapper,
-    fields.currentPassword.wrapper,
     submitBtn,
   ]);
 
@@ -1860,21 +2075,18 @@ function buildEmailCard(user) {
     submitBtn.disabled = true;
     submitBtn.textContent = "Updating…";
     try {
+      if (!(await reauthenticate("email_change"))) return;
       const data = await apiFetch("/v1/me/email", {
         method: "POST",
         body: {
           email: fields.email.input.value.trim(),
-          currentPassword: fields.currentPassword.input.value,
         },
       });
       if (data.unchanged) {
         toast("That's already your email address.");
       } else if (data.emailVerificationRequired) {
-        state.user = null;
-        state.address = null;
-        navigate("/login");
         toast(
-          "Email updated. Check your inbox to verify it, then sign in again.",
+          "Check your new inbox to confirm the change. Your current email remains active until then.",
           "success",
         );
       }
@@ -1914,13 +2126,6 @@ function buildUsernameCard(user) {
       hint: "3–20 characters: lowercase letters, numbers, dots or underscores.",
       extraAttrs: { minlength: 3, maxlength: 20, pattern: "[a-z0-9._]{3,20}" },
     }),
-    currentPassword: field({
-      id: "username-current-password",
-      label: "Current password",
-      type: "password",
-      required: true,
-      autocomplete: "current-password",
-    }),
   };
 
   const errorBanner = el("div", { class: "form-error" });
@@ -1934,7 +2139,6 @@ function buildUsernameCard(user) {
   const form = el("form", { class: "form", novalidate: true }, [
     errorBanner,
     fields.username.wrapper,
-    fields.currentPassword.wrapper,
     submitBtn,
   ]);
 
@@ -1945,11 +2149,11 @@ function buildUsernameCard(user) {
     submitBtn.disabled = true;
     submitBtn.textContent = "Updating…";
     try {
+      if (!(await reauthenticate())) return;
       const data = await apiFetch("/v1/me/username", {
         method: "POST",
         body: {
           username: fields.username.input.value.trim().toLowerCase(),
-          currentPassword: fields.currentPassword.input.value,
         },
       });
       if (data.unchanged) {
@@ -1981,98 +2185,9 @@ function buildUsernameCard(user) {
 
 /* ---- Password ---- */
 
-function buildPasswordCard() {
-  const fields = {
-    currentPassword: field({
-      id: "password-current",
-      label: "Current password",
-      type: "password",
-      required: true,
-      autocomplete: "current-password",
-    }),
-    newPassword: field({
-      id: "password-new",
-      label: "New password",
-      type: "password",
-      required: true,
-      autocomplete: "new-password",
-      hint: "At least 12 characters.",
-      extraAttrs: { minlength: 12, maxlength: 72 },
-    }),
-    confirmPassword: field({
-      id: "password-confirm",
-      label: "Confirm new password",
-      type: "password",
-      required: true,
-      autocomplete: "new-password",
-    }),
-  };
-
-  const errorBanner = el("div", { class: "form-error" });
-  errorBanner.hidden = true;
-  const submitBtn = el(
-    "button",
-    { type: "submit", class: "btn btn--primary" },
-    "Update password",
-  );
-
-  const form = el("form", { class: "form", novalidate: true }, [
-    errorBanner,
-    fields.currentPassword.wrapper,
-    fields.newPassword.wrapper,
-    fields.confirmPassword.wrapper,
-    submitBtn,
-  ]);
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    clearFieldErrors(fields);
-    errorBanner.hidden = true;
-
-    if (fields.newPassword.input.value !== fields.confirmPassword.input.value) {
-      setFieldError(fields.confirmPassword, "Passwords do not match");
-      return;
-    }
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Updating…";
-    try {
-      await apiFetch("/v1/me/password", {
-        method: "POST",
-        body: {
-          currentPassword: fields.currentPassword.input.value,
-          newPassword: fields.newPassword.input.value,
-          confirmPassword: fields.confirmPassword.input.value,
-        },
-      });
-      form.reset();
-      toast(
-        "Password updated. You've been signed out of other devices.",
-        "success",
-      );
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 400 && err.details) {
-        applyServerFieldErrors(fields, err.details);
-      }
-      errorBanner.textContent = friendlyError(err);
-      errorBanner.hidden = false;
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Update password";
-    }
-  });
-
-  return el("div", { class: "card" }, [
-    el("div", { class: "card__head" }, [el("h2", {}, "Password")]),
-    form,
-  ]);
-}
-
-/* ---- Sessions ---- */
-
 function buildSessionsCard() {
   const listContainer = el("div", { class: "entity-list" }, [
-    el("p", { class: "loading-note" }, "Loading sessions…"),
+    createLoader("Loading sessions…"),
   ]);
 
   const revokeOthersBtn = el(
@@ -2083,9 +2198,7 @@ function buildSessionsCard() {
 
   async function refreshSessions() {
     clearNode(listContainer);
-    listContainer.append(
-      el("p", { class: "loading-note" }, "Loading sessions…"),
-    );
+    listContainer.append(createLoader("Loading sessions…"));
     try {
       const data = await apiFetch("/v1/me/sessions");
       clearNode(listContainer);
@@ -2108,9 +2221,7 @@ function buildSessionsCard() {
             el(
               "div",
               { class: "entity-row__sub" },
-              (s.ip ? s.ip + " · " : "") +
-                "Signed in " +
-                formatDateTime(s.createdAt),
+              "Signed in " + formatDateTime(s.createdAt),
             ),
           ]),
         ]);
@@ -2197,16 +2308,26 @@ function buildSessionsCard() {
 
 /* ---- Passkeys ---- */
 
+function buildAuthenticatorCard() {
+  return authenticatorCard({
+    el,
+    field,
+    apiFetch,
+    withReauth,
+    confirmDialog,
+    toast,
+    loadSession,
+  });
+}
+
 function buildPasskeysCard() {
   const listContainer = el("div", { class: "entity-list" }, [
-    el("p", { class: "loading-note" }, "Loading passkeys…"),
+    createLoader("Loading passkeys…"),
   ]);
 
   async function refreshPasskeys() {
     clearNode(listContainer);
-    listContainer.append(
-      el("p", { class: "loading-note" }, "Loading passkeys…"),
-    );
+    listContainer.append(createLoader("Loading passkeys…"));
     try {
       const data = await apiFetch("/v1/auth/passkeys");
       clearNode(listContainer);
@@ -2215,7 +2336,7 @@ function buildPasskeysCard() {
           el(
             "p",
             { class: "empty-note" },
-            "No passkeys yet. Add one to sign in without a password.",
+            "No passkeys yet. Create one below, then choose Sign in with a passkey next time.",
           ),
         );
         return;
@@ -2291,6 +2412,7 @@ function buildPasskeysCard() {
       addBtn.textContent = "Follow your device's prompt…";
       try {
         await registerPasskey(nameField.input.value.trim() || undefined);
+        state.user.hasPasskey = true;
         nameField.input.value = "";
         toast("Passkey added.", "success");
         await refreshPasskeys();
@@ -2314,7 +2436,11 @@ function buildPasskeysCard() {
 
   return el("div", { class: "card" }, [
     el("div", { class: "card__head" }, [el("h2", {}, "Passkeys")]),
-    el("p", { class: "card__hint" }, "Sign in without typing a password."),
+    el(
+      "p",
+      { class: "card__hint" },
+      "Sign in with your fingerprint, face or device PIN instead of a code. Choose Add a passkey and follow your device's prompts to save it.",
+    ),
     listContainer,
     el("hr", { class: "card__divider" }),
     addSection,
@@ -2366,10 +2492,6 @@ function buildDataAccountCard(user) {
       body: "This permanently deletes your account and everything tied to it. This cannot be undone.",
       confirmLabel: "Delete account",
       danger: true,
-      requirePassword: true,
-      passwordLabel: "Current password",
-      passwordHint: "Leave blank if you only sign in with a passkey.",
-      passwordRequired: false,
     });
     if (!result.confirmed) return;
 
@@ -2378,7 +2500,6 @@ function buildDataAccountCard(user) {
       await withReauth(() =>
         apiFetch("/v1/me", {
           method: "DELETE",
-          body: result.password ? { password: result.password } : undefined,
         }),
       );
       state.user = null;

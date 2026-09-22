@@ -1,0 +1,9 @@
+// Typechecks the test suite, which tsconfig.json excludes from the build.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": []
+}

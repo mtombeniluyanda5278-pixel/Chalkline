@@ -10,7 +10,7 @@ try {
       DOTENV_CONFIG_PATH: ".local/no-dotenv",
     };
   else {
-    await bootstrapLocal();
+    await bootstrapLocal(true);
     env = { ...process.env, ...(await localEnvironment(true)) };
   }
   delete env.LOCAL_OWNER_URL;
@@ -20,7 +20,9 @@ try {
       "node_modules/tsx/dist/cli.mjs",
       "--test",
       "--test-concurrency=1",
-      "src/**/*.test.ts",
+      ...(process.argv.length > 2
+        ? process.argv.slice(2)
+        : ["src/**/*.test.ts"]),
     ],
     { env, stdio: "inherit" },
   );

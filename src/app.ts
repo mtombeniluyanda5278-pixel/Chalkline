@@ -1,3 +1,6 @@
+import { registerAuthenticatorRoutes } from "./authenticator.js";
+import { registerTeachingRoutes } from "./teaching.js";
+import { registerPasswordlessRoutes } from "./passwordless.js";
 import { registerFrontend } from "./frontend.js";
 import { registerPreferenceRoutes } from "./preferences.js";
 import { registerAdminRoutes } from "./admin.js";
@@ -34,7 +37,9 @@ export async function buildApp() {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "blob:", "https://i.ytimg.com"],
         frameAncestors: ["'none'"],
+        upgradeInsecureRequests: config.NODE_ENV === "production" ? [] : null,
       },
     },
     hsts: config.NODE_ENV === "production",
@@ -109,12 +114,18 @@ export async function buildApp() {
         { requestId: req.id },
         "Request failed; sensitive details omitted",
       );
+    const expose =
+      typeof err === "object" &&
+      err !== null &&
+      "expose" in err &&
+      err.expose === true;
     const clientMessage =
-      status >= 400 && status < 500 && err instanceof Error
+      err instanceof Error && (status < 500 || expose)
         ? err.message
         : "Request failed.";
 
-    const message = status >= 500 ? "Something went wrong." : clientMessage;
+    const message =
+      status >= 500 && !expose ? "Something went wrong." : clientMessage;
     void reply.code(status).send({
       error: message,
       ...(err &&
@@ -148,11 +159,14 @@ export async function buildApp() {
   });
 
   await registerAuthRoutes(app);
+  await registerPasswordlessRoutes(app);
   await registerRecoveryRoutes(app);
   await registerPreferenceRoutes(app);
   await registerAdminRoutes(app);
   await registerWebAuthnRoutes(app);
+  await registerAuthenticatorRoutes(app);
   await registerDocumentRoutes(app);
+  await registerTeachingRoutes(app);
   await registerResourceRoutes(app);
   await registerDeviceRoutes(app);
   await registerFrontend(app);

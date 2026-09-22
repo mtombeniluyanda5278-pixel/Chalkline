@@ -31,14 +31,24 @@ export function createAutosave({
     inflight = (async () => {
       try {
         const result = await write({ ...snapshot, revision });
-        failures=0;
+        failures = 0;
         revision = result.item.revision;
         saved = serialized;
         onStatus(dirty() ? "Unsaved changes" : "Saved");
       } catch (error) {
         conflict = error.status === 409;
         failures++;
-        if(!disposed && !conflict && error.status!==401 && (!error.status || error.status>=500) && failures<=4) timer=setTimeout(()=>flush().catch(()=>{}),Math.min(30000,1000*2**(failures-1)));
+        if (
+          !disposed &&
+          !conflict &&
+          error.status !== 401 &&
+          (!error.status || error.status >= 500) &&
+          failures <= 4
+        )
+          timer = setTimeout(
+            () => flush().catch(() => {}),
+            Math.min(30000, 1000 * 2 ** (failures - 1)),
+          );
         onStatus(
           conflict
             ? "Conflict — your draft is preserved"

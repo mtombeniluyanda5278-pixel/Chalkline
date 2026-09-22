@@ -1,3 +1,4 @@
+import { LessonMetadata, ownedWorkspace } from "./teaching.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { pool } from "./db.js";
@@ -31,6 +32,7 @@ const Kind = z.enum(["note", "lesson", "template"]);
 const DocumentInput = z.strictObject({
   title: z.string().trim().min(1).max(200),
   content: Content,
+  lesson: LessonMetadata.optional(),
   plannedDate: z.iso.date().nullable().optional(),
 });
 const Resume = z.strictObject({
@@ -46,10 +48,16 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
   app.get("/v1/documents", async (req, reply) => {
     const user = await requireUser(req, reply);
     if (!user) return;
-    await limit("search",user.id);
+    await limit("search", user.id);
     const q = parse(
       z.object({
         kind: Kind.optional(),
+        workspaceId: z.uuid().optional(),
+        unassigned: z.enum(["true"]).optional(),
+        term: z.coerce.number().int().min(1).max(4).optional(),
+        status: z
+          .enum(["Draft", "Planned", "Taught", "Needs review"])
+          .optional(),
         search: z.string().max(200).default(""),
         date: z.iso.date().optional(),
         subject: z.string().max(200).optional(),
@@ -57,15 +65,20 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
       }),
       req.query,
     );
+    if (q.workspaceId) await ownedWorkspace(pool, user.id, q.workspaceId);
     const result = await pool.query(
-      `SELECT id,kind,title,revision,planned_date,updated_at,content->>'subject' AS subject,content->>'grade' AS grade FROM documents WHERE user_id=$1 AND trashed_at IS NULL AND ($2::text IS NULL OR kind=$2) AND ($3='' OR search_vector @@ plainto_tsquery('simple',$3)) AND ($4::date IS NULL OR planned_date=$4) AND ($5::text IS NULL OR content->>'subject'=$5) ORDER BY updated_at DESC,id LIMIT 20 OFFSET $6`,
+      `SELECT id,kind,title,revision,planned_date,updated_at,workspace_id,term,week,lesson_status,taught_at,content->>'topic' AS topic,content->>'subject' AS subject,content->>'grade' AS grade FROM documents WHERE user_id=$1 AND trashed_at IS NULL AND ($2::text IS NULL OR kind=$2) AND ($3='' OR title ILIKE '%'||$3||'%' OR content->>'topic' ILIKE '%'||$3||'%' OR (kind<>'lesson' AND search_vector @@ plainto_tsquery('simple',$3))) AND ($4::date IS NULL OR planned_date=$4) AND ($5::text IS NULL OR content->>'subject'=$5) AND ($7::uuid IS NULL OR workspace_id=$7) AND ($8::boolean=false OR (kind='lesson' AND workspace_id IS NULL)) AND ($9::int IS NULL OR term=$9) AND ($10::text IS NULL OR lesson_status=$10) ORDER BY updated_at DESC,id LIMIT 20 OFFSET $6`,
       [
         user.id,
         q.kind ?? null,
-        q.search.trim().length>=2 ? q.search.trim() : "",
+        q.search.trim(),
         q.date ?? null,
         q.subject ?? null,
         q.offset,
+        q.workspaceId ?? null,
+        q.unassigned === "true",
+        q.term ?? null,
+        q.status ?? null,
       ],
     );
     return { items: result.rows };
@@ -75,8 +88,12 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
     if (!user) return;
     await limit("workspaceWrite", user.id);
     const b = parse(DocumentInput.extend({ kind: Kind }), req.body);
+    if (b.lesson && b.kind !== "lesson")
+      throw failure(400, "Lesson metadata requires a lesson.");
     const result = await transaction(async (c) => {
       await c.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [user.id]);
+      if (b.lesson?.workspaceId)
+        await ownedWorkspace(c, user.id, b.lesson.workspaceId, true);
       const count = await c.query(
         "SELECT count(*) FROM documents WHERE user_id=$1",
         [user.id],
@@ -84,8 +101,18 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
       if (Number(count.rows[0].count) >= 10000)
         throw failure(413, "Document limit reached.");
       return c.query(
-        "INSERT INTO documents(user_id,kind,title,content,planned_date) VALUES($1,$2,$3,$4,$5) RETURNING *",
-        [user.id, b.kind, b.title, b.content, b.plannedDate ?? null],
+        "INSERT INTO documents(user_id,kind,title,content,planned_date,workspace_id,term,week,lesson_status,taught_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $9='Taught' THEN now() ELSE NULL END) RETURNING *",
+        [
+          user.id,
+          b.kind,
+          b.title,
+          b.content,
+          b.plannedDate ?? null,
+          b.lesson?.workspaceId ?? null,
+          b.lesson?.term ?? null,
+          b.lesson?.week ?? null,
+          b.lesson?.status ?? "Draft",
+        ],
       );
     });
     return reply.code(201).send({ item: result.rows[0] });
@@ -104,11 +131,14 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
       [user.id, id],
     );
     const resources = await pool.query(
-      `SELECT r.id,r.title,r.mime FROM resources r JOIN lesson_resources l ON l.resource_id=r.id AND l.user_id=r.user_id WHERE l.document_id=$1 AND l.user_id=$2 AND r.status='ready'`,
+      `SELECT r.id,r.title,r.mime,r.category,r.external_url FROM resources r JOIN lesson_resources l ON l.resource_id=r.id AND l.user_id=r.user_id WHERE l.document_id=$1 AND l.user_id=$2 AND r.status='ready' AND (r.scanned_at IS NOT NULL OR r.external_url IS NOT NULL)`,
       [id, user.id],
     );
     return {
       item: result.rows[0],
+      workspace: result.rows[0].workspace_id
+        ? await ownedWorkspace(pool, user.id, result.rows[0].workspace_id)
+        : null,
       resume: resume.rows[0]?.state ?? {},
       resources: resources.rows,
     };
@@ -123,13 +153,22 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
         req.body,
       );
     const item = await transaction(async (c) => {
-      await c.query("SELECT id FROM users WHERE id=$1 FOR UPDATE",[user.id]);
+      await c.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [user.id]);
       const old = await c.query(
         "SELECT * FROM documents WHERE id=$1 AND user_id=$2 AND trashed_at IS NULL FOR UPDATE",
         [id, user.id],
       );
       const row = old.rows[0];
       if (!row) throw failure(404, "Document not found.");
+      if (b.lesson && row.kind !== "lesson")
+        throw failure(400, "Lesson metadata requires a lesson.");
+      if (b.lesson?.workspaceId)
+        await ownedWorkspace(
+          c,
+          user.id,
+          b.lesson.workspaceId,
+          b.lesson.workspaceId !== row.workspace_id,
+        );
       if (row.revision !== b.revision)
         throw failure(
           409,
@@ -140,8 +179,18 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
         [id, row.revision, row.title, row.content],
       );
       const updated = await c.query(
-        "UPDATE documents SET title=$3,content=$4,planned_date=$5,revision=revision+1,updated_at=now() WHERE id=$1 AND user_id=$2 RETURNING *",
-        [id, user.id, b.title, b.content, b.plannedDate ?? null],
+        "UPDATE documents SET title=$3,content=$4,planned_date=$5,workspace_id=$6,term=$7,week=$8,lesson_status=$9,taught_at=CASE WHEN $9='Taught' THEN coalesce(taught_at,now()) ELSE NULL END,revision=revision+1,updated_at=now() WHERE id=$1 AND user_id=$2 RETURNING *",
+        [
+          id,
+          user.id,
+          b.title,
+          b.content,
+          b.plannedDate ?? null,
+          b.lesson ? b.lesson.workspaceId : row.workspace_id,
+          b.lesson ? b.lesson.term : row.term,
+          b.lesson ? b.lesson.week : row.week,
+          b.lesson?.status ?? row.lesson_status,
+        ],
       );
       await c.query(
         "DELETE FROM document_revisions WHERE document_id=$1 AND (created_at<now()-interval '30 days' OR revision NOT IN (SELECT revision FROM document_revisions WHERE document_id=$1 ORDER BY revision DESC LIMIT 50))",
@@ -186,11 +235,18 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
     if (!user) return;
     await limit("workspaceWrite", user.id);
     const b = parse(
-      z.strictObject({ kind: Kind, title: z.string().trim().min(1).max(200) }),
+      z.strictObject({
+        kind: Kind,
+        title: z.string().trim().min(1).max(200),
+        workspaceId: z.uuid().optional(),
+      }),
       req.body,
     );
+    if (b.workspaceId && b.kind !== "lesson")
+      throw failure(400, "Choose a lesson destination.");
     const item = await transaction(async (c) => {
       await c.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [user.id]);
+      if (b.workspaceId) await ownedWorkspace(c, user.id, b.workspaceId, true);
       const count = await c.query(
         "SELECT count(*) FROM documents WHERE user_id=$1",
         [user.id],
@@ -198,13 +254,13 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
       if (Number(count.rows[0].count) >= 10000)
         throw failure(413, "Document limit reached.");
       const result = await c.query(
-        `INSERT INTO documents(user_id,kind,title,content) SELECT user_id,$3,$4,content - 'date' FROM documents WHERE id=$1 AND user_id=$2 AND trashed_at IS NULL RETURNING *`,
-        [itemId(req), user.id, b.kind, b.title],
+        `INSERT INTO documents(user_id,kind,title,content,workspace_id,term,week) SELECT user_id,$3,$4,CASE WHEN $3='lesson' THEN content - 'date' - 'reflection' ELSE content - 'date' END,CASE WHEN $3='lesson' THEN $5::uuid ELSE NULL END,term,week FROM documents WHERE id=$1 AND user_id=$2 AND trashed_at IS NULL RETURNING *`,
+        [itemId(req), user.id, b.kind, b.title, b.workspaceId ?? null],
       );
       if (!result.rows[0]) throw failure(404, "Document not found.");
       if (b.kind === "lesson")
         await c.query(
-          "INSERT INTO lesson_resources(document_id,resource_id,user_id) SELECT $3,l.resource_id,l.user_id FROM lesson_resources l JOIN resources r ON r.id=l.resource_id AND r.user_id=l.user_id WHERE l.document_id=$1 AND l.user_id=$2 AND r.status='ready'",
+          "INSERT INTO lesson_resources(document_id,resource_id,user_id) SELECT $3,l.resource_id,l.user_id FROM lesson_resources l JOIN resources r ON r.id=l.resource_id AND r.user_id=l.user_id WHERE l.document_id=$1 AND l.user_id=$2 AND r.status='ready' AND (r.scanned_at IS NOT NULL OR r.external_url IS NOT NULL)",
           [itemId(req), user.id, result.rows[0].id],
         );
       return result.rows[0];
@@ -219,7 +275,7 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
       req.params,
     );
     const result = await pool.query(
-      `INSERT INTO lesson_resources(document_id,resource_id,user_id) SELECT d.id,r.id,d.user_id FROM documents d JOIN resources r ON r.user_id=d.user_id WHERE d.id=$1 AND d.user_id=$2 AND d.trashed_at IS NULL AND d.kind='lesson' AND r.id=$3 AND r.status='ready' ON CONFLICT DO NOTHING RETURNING resource_id`,
+      `INSERT INTO lesson_resources(document_id,resource_id,user_id) SELECT d.id,r.id,d.user_id FROM documents d JOIN resources r ON r.user_id=d.user_id WHERE d.id=$1 AND d.user_id=$2 AND d.trashed_at IS NULL AND d.kind='lesson' AND r.id=$3 AND r.status='ready' AND (r.scanned_at IS NOT NULL OR r.external_url IS NOT NULL) ON CONFLICT DO NOTHING RETURNING resource_id`,
       [p.id, user.id, p.resourceId],
     );
     if (!result.rowCount)
@@ -233,6 +289,15 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
       z.object({ id: z.uuid(), resourceId: z.uuid() }),
       req.params,
     );
+    if (
+      !(
+        await pool.query(
+          "SELECT d.id FROM documents d JOIN resources r ON r.user_id=d.user_id WHERE d.id=$1 AND d.user_id=$2 AND d.kind='lesson' AND d.trashed_at IS NULL AND r.id=$3",
+          [p.id, user.id, p.resourceId],
+        )
+      ).rowCount
+    )
+      throw failure(404, "Lesson or resource unavailable.");
     await pool.query(
       "DELETE FROM lesson_resources WHERE document_id=$1 AND resource_id=$2 AND user_id=$3",
       [p.id, p.resourceId, user.id],
@@ -264,8 +329,12 @@ export async function registerDocumentRoutes(app: FastifyInstance) {
   app.get("/v1/workspace", async (req, reply) => {
     const user = await requireUser(req, reply);
     if (!user) return;
-    const tz=(await pool.query("SELECT timezone FROM users WHERE id=$1",[user.id])).rows[0].timezone;
-    const q={today:new Date().toLocaleDateString("en-CA",{timeZone:tz})};
+    const tz = (
+      await pool.query("SELECT timezone FROM users WHERE id=$1", [user.id])
+    ).rows[0].timezone;
+    const q = {
+      today: new Date().toLocaleDateString("en-CA", { timeZone: tz }),
+    };
     const [resume, notes, files, lessons, activity] = await Promise.all([
       pool.query(
         `SELECT s.*,coalesce(d.title,r.title) AS title,coalesce(d.kind,'file') AS kind FROM resume_state s LEFT JOIN documents d ON d.id=s.document_id LEFT JOIN resources r ON r.id=s.resource_id WHERE s.user_id=$1 AND ((d.id IS NOT NULL AND d.trashed_at IS NULL) OR r.status='ready') ORDER BY s.opened_at DESC LIMIT 6`,

@@ -1,8 +1,12 @@
 import { z } from "zod";
 import type { FastifyRequest } from "fastify";
 import { consumeRateLimit, type buckets } from "./rateLimit.js";
-export function failure(statusCode: number, message: string) {
-  return Object.assign(new Error(message), { statusCode });
+export function failure(
+  statusCode: number,
+  message: string,
+  extra?: Record<string, unknown>,
+) {
+  return Object.assign(new Error(message), { statusCode, ...extra });
 }
 export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);

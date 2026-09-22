@@ -12,13 +12,23 @@ const Env = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
   APP_NAME: z.string().default("Chix"),
+  OPENAI_API_KEY: z.string().default(""),
+  TIMETABLE_VISION_MODEL: z.string().default("gpt-4o"),
   OUTBOX_ENCRYPTION_KEY: z
     .string()
     .regex(/^[a-fA-F0-9]{64}$/)
     .optional(),
-  OUTBOX_PREVIOUS_ENCRYPTION_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
+  OUTBOX_PREVIOUS_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/)
+    .optional(),
   TOKEN_PASSWORD_RESET_MINUTES: bytes(15),
-  TOKEN_VERIFY_EMAIL_MINUTES: bytes(1440),
+  TOKEN_VERIFY_EMAIL_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(30)
+    .default(10),
   TOKEN_VERIFY_RECOVERY_MINUTES: bytes(30),
   TOKEN_CHANGE_EMAIL_MINUTES: bytes(30),
   TOKEN_ACCOUNT_DISCOVERY_MINUTES: bytes(15),
@@ -29,10 +39,26 @@ const Env = z.object({
   LOGIN_STRONG_THROTTLE_AFTER: bytes(10),
   LOGIN_FAILURE_IP_MAX: bytes(30),
   BOT_ADAPTIVE_AFTER: bytes(2),
-  RATE_LIMIT_POLICY_JSON: z.string().transform((value, ctx) => {
-    try { return JSON.parse(value); }
-    catch { ctx.addIssue({code:'custom',message:'Rate-limit policy must be valid JSON.'}); return z.NEVER; }
-  }).pipe(z.record(z.string(), z.strictObject({max:bytes(1),windowMs:bytes(1000)}))).optional(),
+  RATE_LIMIT_POLICY_JSON: z
+    .string()
+    .transform((value, ctx) => {
+      try {
+        return JSON.parse(value);
+      } catch {
+        ctx.addIssue({
+          code: "custom",
+          message: "Rate-limit policy must be valid JSON.",
+        });
+        return z.NEVER;
+      }
+    })
+    .pipe(
+      z.record(
+        z.string(),
+        z.strictObject({ max: bytes(1), windowMs: bytes(1000) }),
+      ),
+    )
+    .optional(),
   RATE_LIMIT_KEY_SECRET: z.string().min(64).optional(),
   SESSION_DEFAULT_DAYS: z.coerce
     .number()
@@ -72,12 +98,24 @@ const Env = z.object({
   MAX_DOWNLOADS_PER_USER: bytes(4),
   MAX_DOWNLOADS_GLOBAL: bytes(20),
   MAX_SCANS_GLOBAL: bytes(2),
-  SCANNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(300000).default(60000),
-  SCANNER_HEALTH_TIMEOUT_MS: z.coerce.number().int().min(100).max(10000).default(2000),
+  SCANNER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(300000)
+    .default(60000),
+  SCANNER_HEALTH_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(10000)
+    .default(2000),
   TRASH_RETENTION_DAYS: bytes(30),
   ACCOUNT_DELETION_AUDIT_RETENTION_DAYS: bytes(30),
   ADMIN_IDLE_MAX_MINUTES: z.coerce.number().int().min(1).max(60).default(30),
   ADMIN_REQUIRE_PASSKEY: bool(false),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
@@ -122,6 +160,9 @@ const Env = z.object({
     .int()
     .positive()
     .default(500 * 1024 * 1024),
+  BREVO_API_KEY: z.string().min(1).optional(),
+  BREVO_SENDER_EMAIL: z.email().optional(),
+  BREVO_SENDER_NAME: z.string().min(1).default("Chix"),
   EMAIL_DELIVERY_URL: z.url().optional(),
   EMAIL_DELIVERY_TOKEN: z.string().optional(),
   EMAIL_REQUIRED: z
@@ -136,7 +177,9 @@ export const config = Env.parse(
 );
 export const isProd = config.NODE_ENV === "production";
 if (!config.OUTBOX_ENCRYPTION_KEY || !config.RATE_LIMIT_KEY_SECRET)
-  throw new Error("Persistent dedicated outbox and rate-limit keys are required. Local development generates them with docker compose up -d.");
+  throw new Error(
+    "Persistent dedicated outbox and rate-limit keys are required. Local development generates them with docker compose up -d.",
+  );
 if (config.MALWARE_SCANNER_MODE === "clamav" && !config.CLAMAV_HOST)
   throw new Error("CLAMAV_HOST is required.");
 if (isProd) {
@@ -164,6 +207,7 @@ if (isProd) {
     );
   if (
     config.EMAIL_REQUIRED &&
+    !(config.BREVO_API_KEY && config.BREVO_SENDER_EMAIL) &&
     (!config.EMAIL_DELIVERY_URL || !config.EMAIL_DELIVERY_TOKEN)
   )
     throw new Error(

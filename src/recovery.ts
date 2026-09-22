@@ -36,7 +36,7 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
     await limit("emailChange", session.id);
     const b = parse(z.strictObject({ email: Email }), req.body);
     await transaction(async (c) => {
-      const user = await lockSessionUser(c,session,true);
+      const user = await lockSessionUser(c, session, true);
       if (user.email.toLowerCase() === b.email)
         throw failure(
           400,
@@ -52,6 +52,7 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
         "recovery_email_change_requested",
         req.ip,
         c,
+        req.headers["user-agent"],
       );
     });
     return { ok: true };
@@ -90,7 +91,13 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
         "UPDATE users SET recovery_email=$2,recovery_verified_at=now(),pending_recovery_email=NULL WHERE id=$1",
         [user.id, token.target_email],
       );
-      await securityEvent(user.id, "recovery_email_changed", req.ip, c);
+      await securityEvent(
+        user.id,
+        "recovery_email_changed",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
     });
     return { ok: true };
   });
@@ -98,7 +105,7 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
     const session = await requireUser(req, reply);
     if (!session || !(await requireRecentAuth(session, reply))) return;
     await transaction(async (c) => {
-      const row = await lockSessionUser(c,session,true);
+      const row = await lockSessionUser(c, session, true);
       if (row.recovery_email)
         await deliverDevOrLogEmail(
           {
@@ -117,7 +124,13 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
         "UPDATE email_tokens SET used_at=now() WHERE user_id=$1 AND (purpose IN ('verify_recovery','account_discovery') OR channel='recovery') AND used_at IS NULL",
         [session.id],
       );
-      await securityEvent(session.id, "recovery_email_removed", req.ip, c);
+      await securityEvent(
+        session.id,
+        "recovery_email_removed",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
     });
     return { ok: true };
   });
@@ -150,7 +163,7 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
         c,
       );
       await c.query(
-        "UPDATE users SET email=$2,email_verified_at=now(),auth_epoch=auth_epoch+1 WHERE id=$1",
+        "UPDATE users SET pending_recovery_email=NULL,email=$2,email_verified_at=now(),auth_epoch=auth_epoch+1 WHERE id=$1",
         [user.id, token.target_email],
       );
       await c.query("DELETE FROM sessions WHERE user_id=$1", [user.id]);
@@ -162,7 +175,13 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
         "UPDATE device_challenges SET status='denied' WHERE user_id=$1 AND status IN ('pending','approved')",
         [user.id],
       );
-      await securityEvent(user.id, "email_changed", req.ip, c);
+      await securityEvent(
+        user.id,
+        "email_changed",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
     });
     return { ok: true };
   });
@@ -175,7 +194,12 @@ export async function registerRecoveryRoutes(app: FastifyInstance) {
       }),
       req.body,
     );
-    await recoveryProtection("account_discovery",b.recoveryEmail,req.ip,b.captchaToken);
+    await recoveryProtection(
+      "account_discovery",
+      b.recoveryEmail,
+      req.ip,
+      b.captchaToken,
+    );
     await transaction(async (c) => {
       const users = (
         await c.query(

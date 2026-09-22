@@ -1,4 +1,10 @@
-import { registerVerifiedAccount, verificationToken } from "./testAccounts.js";
+import {
+  registerVerifiedAccount,
+  verificationToken,
+  signIn,
+  enrollAuthenticator,
+  totpLogin,
+} from "./testAccounts.js";
 import { test, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID, generateKeyPairSync, createHash, sign } from "node:crypto";
@@ -16,7 +22,6 @@ import {
 } from "./rateLimit.js";
 const app = await buildApp(),
   users: string[] = [];
-const password = "correct horse battery staple";
 before(connectRedis);
 beforeEach(clearTestRateLimits);
 after(async () => {
@@ -34,8 +39,6 @@ function input(trustDevice = false) {
     lastName: "Test",
     country: "ZA",
     dateOfBirth: "2000-01-01",
-    password,
-    confirmPassword: password,
     trustDevice,
   };
 }
@@ -92,18 +95,21 @@ for (const trust of [false, true])
     );
   });
 
-test("cookies reflect 1/7/30/90 day preferences and temporary sessions", async () => {
+test("cookies reflect 1/7/30/90 day preferences", async () => {
   const a = await account(true);
   for (const days of [1, 7, 30, 90]) {
+    // Four OTP requests for one address would otherwise trip captcha escalation.
+    await clearTestRateLimits();
     await pool.query("UPDATE users SET session_days=$2 WHERE id=$1", [
       a.id,
       days,
     ]);
-    const r = await post("/v1/auth/login", a.cookie, {
-      email: a.body.email,
-      password,
+    // Trusting the browser is what binds a device id, which is what lets the
+    // session pick up session_days instead of the 43200s floor.
+    const r = await signIn(app, a.body.email, {
+      trustDevice: true,
+      cookie: a.cookie,
     });
-    assert.equal(r.statusCode, 200, r.body);
     const c = [r.headers["set-cookie"]]
       .flat()
       .find((s) => s?.startsWith("chalkline_session="))!;
@@ -122,6 +128,29 @@ test("cookies reflect 1/7/30/90 day preferences and temporary sessions", async (
       ) < 1000,
     );
   }
+});
+
+test("sessions record the factor that actually authenticated them", async () => {
+  const a = await account(true);
+  const recorded = async () =>
+    (
+      await pool.query("SELECT auth_method FROM sessions WHERE id=$1", [
+        await sessionId(a.cookie),
+      ])
+    ).rows[0].auth_method;
+  // No account can hold a password, so no session may claim one.
+  assert.equal(await recorded(), "email_otp");
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*)::int AS n FROM sessions WHERE auth_method='password'",
+      )
+    ).rows[0].n,
+    0,
+  );
+});
+
+test("registration without device trust issues a temporary session cookie", async () => {
   const temporary = await account();
   const c = [temporary.response.headers["set-cookie"]]
     .flat()
@@ -140,7 +169,10 @@ test("session listing excludes every invalid state and exposes no raw IP", async
     "last_active_at=now()-interval '20 days'",
     "auth_epoch=-1",
   ]) {
-    const s = await createSession(a.id, { ip: "203.0.113.17" });
+    const s = await createSession(a.id, {
+      ip: "203.0.113.17",
+      authMethod: "email_otp",
+    });
     await pool.query(`UPDATE sessions SET ${condition} WHERE token_hash=$1`, [
       hashToken(s.token),
     ]);
@@ -160,7 +192,7 @@ test("session listing excludes every invalid state and exposes no raw IP", async
       [a.id, hashToken(randomUUID())],
     )
   ).rows[0].id;
-  const s = await createSession(a.id, { deviceId: d });
+  const s = await createSession(a.id, { deviceId: d, authMethod: "email_otp" });
   await pool.query("UPDATE trusted_devices SET revoked_at=now() WHERE id=$1", [
     d,
   ]);
@@ -170,7 +202,7 @@ test("session listing excludes every invalid state and exposes no raw IP", async
       [a.id, hashToken(randomUUID())],
     )
   ).rows[0].id;
-  await createSession(a.id, { deviceId: expired });
+  await createSession(a.id, { deviceId: expired, authMethod: "email_otp" });
   const r = await app.inject({
     url: "/v1/me/sessions",
     headers: { cookie: a.cookie },
@@ -211,7 +243,9 @@ test("post-commit bootstrap failure preserves one account, event and verificatio
     return (query as any)(...args);
   });
   const response = await post("/v1/auth/register", "", body);
-  const verified = await post("/v1/auth/verify-email", "", {token: await verificationToken(body.email)});
+  const verified = await post("/v1/auth/verify-email", "", {
+    ...(await verificationToken(body.email)),
+  });
   mock.mock.restore();
   assert.equal(verified.statusCode, 200, verified.body);
   assert.equal(verified.json().signInRequired, true);
@@ -268,68 +302,6 @@ test("registration conflicts return generic responses without constraint details
     );
     assert.equal(r.json().verificationRequired, true);
   }
-});
-
-test("password step-up requires session, preserves token, rejects wrong password and rate limits", async () => {
-  const a = await account();
-  const id = await sessionId(a.cookie);
-  await pool.query(
-    "UPDATE sessions SET reauthenticated_at=now()-interval '1 day' WHERE id=$1",
-    [id],
-  );
-  assert.equal(
-    (await post("/v1/auth/reauth", "", { password })).statusCode,
-    401,
-  );
-  assert.equal(
-    (await post("/v1/auth/reauth", a.cookie, { password: "incorrect" }))
-      .statusCode,
-    401,
-  );
-  const r = await post("/v1/auth/reauth", a.cookie, { password });
-  assert.equal(r.statusCode, 200, r.body);
-  assert.equal(r.headers["set-cookie"], undefined);
-  assert.ok(
-    Date.now() -
-      (
-        await pool.query(
-          "SELECT reauthenticated_at FROM sessions WHERE id=$1",
-          [id],
-        )
-      ).rows[0].reauthenticated_at.getTime() <
-      5000,
-  );
-  for (let n = 2; n < buckets.passwordChange.max; n++)
-    await post("/v1/auth/reauth", a.cookie, { password: "incorrect" });
-  assert.equal(
-    (await post("/v1/auth/reauth", a.cookie, { password })).statusCode,
-    429,
-  );
-});
-
-test("fresh password verification authorizes password change despite old step-up timestamp", async () => {
-  const a = await account();
-  const id = await sessionId(a.cookie);
-  await pool.query(
-    "UPDATE sessions SET reauthenticated_at=now()-interval '1 day' WHERE id=$1",
-    [id],
-  );
-  const r = await post("/v1/me/password", a.cookie, {
-    currentPassword: password,
-    newPassword: "a different secure password",
-    confirmPassword: "a different secure password",
-  });
-  assert.equal(r.statusCode, 200, r.body);
-  assert.equal(
-    (await app.inject({ url: "/v1/me", headers: { cookie: a.cookie } }))
-      .statusCode,
-    401,
-  );
-  assert.equal(
-    (await app.inject({ url: "/v1/me", headers: { cookie: cookies(r) } }))
-      .statusCode,
-    200,
-  );
 });
 
 async function authenticator(userId: string) {
@@ -481,7 +453,7 @@ test("passkey step-up is one-use, session-bound, UV/origin/RP checked, and canno
           );
     let cookie = a.cookie;
     if (invalid === "session") {
-      const s = await createSession(a.id, {});
+      const s = await createSession(a.id, { authMethod: "email_otp" });
       cookie = `chalkline_session=${s.token}`;
     }
     if (invalid === "expired")
@@ -573,10 +545,8 @@ test("port-3000 app serves public assets and SPA routes but never private files"
 
 test("device approval requires an already trusted browser and recent authentication", async () => {
   const a = await account(false);
-  const login = await post("/v1/auth/login", "", {
-    email: a.body.email,
-    password,
-  });
+  const secret = await enrollAuthenticator(app, a.cookie);
+  const login = await totpLogin(app, a.body.email, secret);
   assert.equal(login.statusCode, 202, login.body);
   const pending = (
     await pool.query(
@@ -590,10 +560,9 @@ test("device approval requires an already trusted browser and recent authenticat
   });
   assert.equal(r.statusCode, 403, r.body);
   const trusted = await account(true);
-  const challenge = await post("/v1/auth/login", "", {
-    email: trusted.body.email,
-    password,
-  });
+  const trustedSecret = await enrollAuthenticator(app, trusted.cookie);
+  const challenge = await totpLogin(app, trusted.body.email, trustedSecret);
+  assert.equal(challenge.statusCode, 202, challenge.body);
   const id = await sessionId(trusted.cookie);
   await pool.query(
     "UPDATE sessions SET reauthenticated_at=now()-interval '1 day' WHERE id=$1",
@@ -612,26 +581,6 @@ test("device approval requires an already trusted browser and recent authenticat
   );
   assert.equal(stale.statusCode, 401);
   assert.equal(stale.json().code, "REAUTH_REQUIRED");
-});
-
-test("fresh password confirmation authorizes account deletion despite stale step-up time", async () => {
-  const a = await account();
-  await pool.query(
-    "UPDATE sessions SET reauthenticated_at=now()-interval '1 day' WHERE user_id=$1",
-    [a.id],
-  );
-  const r = await app.inject({
-    method: "DELETE",
-    url: "/v1/me",
-    headers: { cookie: a.cookie },
-    payload: { password },
-  });
-  assert.equal(r.statusCode, 200, r.body);
-  assert.equal(
-    (await app.inject({ url: "/v1/me", headers: { cookie: a.cookie } }))
-      .statusCode,
-    401,
-  );
 });
 
 test("passkey login rejects wrong origin, RP, UV and replay before granting trust", async () => {
@@ -673,5 +622,53 @@ test("passkey login rejects wrong origin, RP, UV and replay before granting trus
     (await pool.query("SELECT id FROM sessions WHERE user_id=$1", [a.id]))
       .rowCount,
     1,
+  );
+});
+
+test("passkey step-up rechecks administrator idle expiry during verification", async (t) => {
+  const a = await account();
+  await pool.query("UPDATE users SET role='admin' WHERE id=$1", [a.id]);
+  const key = await authenticator(a.id);
+  const id = await sessionId(a.cookie);
+  const options = await post("/v1/auth/passkeys/step-up/options", a.cookie);
+  assert.equal(options.statusCode, 200, options.body);
+  const originalQuery = pool.query.bind(pool);
+  // Expire after requireUser has read the session, before the transactional UPDATE.
+  t.mock.method(pool, "query", async (...args: any[]) => {
+    const result = await (originalQuery as any)(...args);
+    if (
+      typeof args[0] === "string" &&
+      args[0].startsWith("UPDATE sessions SET last_active_at=now()")
+    ) {
+      await originalQuery(
+        "UPDATE sessions SET last_active_at=now()-($2::int*interval '1 minute'),reauthenticated_at=now()-interval '1 day' WHERE id=$1",
+        [id, config.ADMIN_IDLE_MAX_MINUTES + 1],
+      );
+    }
+    return result;
+  });
+  const response = await post(
+    "/v1/auth/passkeys/step-up/verify",
+    a.cookie,
+    key.assertion(options.json().challenge),
+  );
+  assert.equal(response.statusCode, 401, response.body);
+  assert.equal(response.headers["set-cookie"], undefined);
+  const session = (
+    await originalQuery("SELECT reauthenticated_at FROM sessions WHERE id=$1", [
+      id,
+    ])
+  ).rows[0];
+  assert.ok(Date.now() - session.reauthenticated_at.getTime() > 600000);
+  const credential = (
+    await originalQuery(
+      "SELECT counter FROM webauthn_credentials WHERE user_id=$1",
+      [a.id],
+    )
+  ).rows[0];
+  assert.equal(
+    Number(credential.counter),
+    0,
+    "failed step-up rolls back the credential counter",
   );
 });

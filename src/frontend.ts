@@ -6,10 +6,15 @@ import { config } from "./config.js";
 const assets = [
   "index.html",
   "app.js",
+  "theme.js",
   "workspace.js",
+  "lessons.js",
+  "loading.js",
+  "authenticator-ui.js",
   "extras.js",
   "autosave.js",
   "readers.js",
+  "resource-preview.js",
   "styles.css",
 ];
 export async function registerFrontend(app: FastifyInstance) {

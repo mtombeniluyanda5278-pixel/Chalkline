@@ -6,6 +6,7 @@ import { config } from "./config.js";
 import { pool } from "./db.js";
 import { transaction } from "./transactions.js";
 import {
+  lockSessionUser,
   hashToken,
   createSession,
   setSessionCookie,
@@ -27,6 +28,18 @@ const cookieOptions = {
 };
 const label = (req: FastifyRequest) =>
   (req.headers["user-agent"] ?? "Browser").slice(0, 200);
+// Session auth_method values that completeSignIn can record.
+type SignInMethod = "password" | "passkey" | "email_otp" | "google" | "totp";
+// Factors that prove possession of the browser's own mailbox/authenticator and
+// so may establish trust by themselves. Everything else (a password, or a TOTP
+// code that a phished user will read out) must be approved from a device the
+// account already trusts.
+const SELF_TRUSTING = new Set([
+  "passkey",
+  "registration",
+  "email_otp",
+  "google",
+]);
 async function trust(c: PoolClient, userId: string, deviceLabel: string) {
   const raw = randomBytes(32).toString("base64url");
   const row = (
@@ -42,9 +55,9 @@ async function issue(
   reply: FastifyReply,
   userId: string,
   deviceId: string | undefined,
-  raw?: string,
-  authEpoch?: number,
-  authMethod: "password" | "passkey" = "password",
+  raw: string | undefined,
+  authEpoch: number | undefined,
+  authMethod: SignInMethod,
 ) {
   const [old, ...duplicates] = sessionTokens(req);
   if (old) await destroySession(old, ...duplicates);
@@ -62,16 +75,63 @@ async function issue(
       maxAge: config.DEVICE_TRUST_DAYS * 86400,
     });
   reply.clearCookie(PENDING_COOKIE, { path: "/" });
-  await securityEvent(userId, "login_success", req.ip);
+  await securityEvent(
+    userId,
+    "login_success",
+    req.ip,
+    undefined,
+    req.headers["user-agent"],
+  );
 }
+// Resolves this browser's trusted-device id inside a caller's transaction, for
+// sign-in flows that must stay transactional and so cannot call completeSignIn.
+// Without a device id the session falls back to 43200s and ignores session_days.
+export async function deviceForSignIn(
+  c: PoolClient,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  userId: string,
+  trustDevice: boolean,
+): Promise<string | undefined> {
+  const known = req.cookies[DEVICE_COOKIE];
+  if (known) {
+    const found = (
+      await c.query(
+        "SELECT id FROM trusted_devices WHERE user_id=$1 AND token_hash=$2 AND revoked_at IS NULL AND expires_at>now()",
+        [userId, hashToken(known)],
+      )
+    ).rows[0];
+    if (found) {
+      await c.query(
+        "UPDATE trusted_devices SET last_seen_at=now() WHERE id=$1",
+        [found.id],
+      );
+      return found.id;
+    }
+  }
+  if (!trustDevice) return undefined;
+  const device = await trust(c, userId, label(req));
+  reply.setCookie(DEVICE_COOKIE, device.raw, {
+    ...cookieOptions,
+    maxAge: config.DEVICE_TRUST_DAYS * 86400,
+  });
+  return device.id;
+}
+
 export async function completeSignIn(
   req: FastifyRequest,
   reply: FastifyReply,
   userId: string,
-  method: "password" | "passkey" | "registration",
+  method: SignInMethod | "registration",
   trustDevice: boolean,
   authEpoch?: number,
 ) {
+  // Sessions only get the user's session_days preference when they carry a
+  // device id, so every method must reach one of the issue() calls below.
+  // Registration completes by entering the emailed verification code, so that
+  // is the factor the session actually rests on.
+  const sessionMethod: SignInMethod =
+    method === "registration" ? "email_otp" : method;
   // Device trust only applies AFTER the caller verifies password/passkey.
   const known = req.cookies[DEVICE_COOKIE];
   const found = known
@@ -82,16 +142,27 @@ export async function completeSignIn(
         )
       ).rows[0]
     : null;
-  if (found && method === "password") {
+  // A browser the account already trusts is recognised whatever the factor:
+  // re-using its device id is what lets the session honour session_days.
+  if (found) {
     await pool.query(
       "UPDATE trusted_devices SET last_seen_at=now() WHERE id=$1",
       [found.id],
     );
-    await issue(req, reply, userId, found.id, undefined, authEpoch, "password");
+    await issue(
+      req,
+      reply,
+      userId,
+      found.id,
+      undefined,
+      authEpoch,
+      sessionMethod,
+    );
     return null;
   }
-  // Verified UV passkey and account creation establish trust without another device.
-  if (method === "passkey" || method === "registration") {
+  // Verified UV passkey, account creation and mailbox-proving codes establish
+  // trust without a second device.
+  if (SELF_TRUSTING.has(method)) {
     const device = trustDevice
       ? await transaction((c) => trust(c, userId, label(req)))
       : undefined;
@@ -102,9 +173,16 @@ export async function completeSignIn(
       device?.id,
       device?.raw,
       authEpoch,
-      method === "passkey" ? "passkey" : "password",
+      sessionMethod,
     );
-    if (device) await securityEvent(userId, "device_trusted_" + method, req.ip);
+    if (device)
+      await securityEvent(
+        userId,
+        "device_trusted_" + method,
+        req.ip,
+        undefined,
+        req.headers["user-agent"],
+      );
     return null;
   }
   await limit("deviceChallenge", userId);
@@ -121,8 +199,20 @@ export async function completeSignIn(
         [userId, hashToken(raw), number, label(req), req.ip, authEpoch],
       )
     ).rows[0];
-    await securityEvent(userId, "new_device_detected", req.ip, c);
-    await securityEvent(userId, "device_approval_requested", req.ip, c);
+    await securityEvent(
+      userId,
+      "new_device_detected",
+      req.ip,
+      c,
+      req.headers["user-agent"],
+    );
+    await securityEvent(
+      userId,
+      "device_approval_requested",
+      req.ip,
+      c,
+      req.headers["user-agent"],
+    );
     return row;
   });
   reply.setCookie(PENDING_COOKIE, raw, { ...cookieOptions, maxAge: 300 });
@@ -141,6 +231,19 @@ async function pending(req: FastifyRequest) {
     throw failure(401, "Approval expired. Start sign-in again.");
   return row;
 }
+async function lockPending(
+  c: PoolClient,
+  p: { user_id: string; auth_epoch: number },
+) {
+  const user = (
+    await c.query(
+      "SELECT auth_epoch,suspended_at FROM users WHERE id=$1 FOR UPDATE",
+      [p.user_id],
+    )
+  ).rows[0];
+  if (!user || user.suspended_at || user.auth_epoch !== p.auth_epoch)
+    throw failure(401, "Start sign-in again.");
+}
 export async function registerDeviceRoutes(app: FastifyInstance) {
   app.get("/v1/devices/pending", async (req, reply) => {
     const row = await pending(req);
@@ -158,6 +261,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       req.body ?? {},
     );
     const device = await transaction(async (c) => {
+      await lockPending(c, p);
       const result = await c.query(
         "UPDATE device_challenges SET status='consumed' WHERE id=$1 AND token_hash=$2 AND status='approved' AND expires_at>now() RETURNING user_id,label",
         [p.id, hashToken(req.cookies[PENDING_COOKIE]!)],
@@ -168,7 +272,17 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
         ? trust(c, result.rows[0].user_id, result.rows[0].label)
         : undefined;
     });
-    await issue(req, reply, p.user_id, device?.id, device?.raw, p.auth_epoch);
+    // TOTP is the only factor outside SELF_TRUSTING, so it is the only one that
+    // can have raised this challenge. Revisit if another joins it.
+    await issue(
+      req,
+      reply,
+      p.user_id,
+      device?.id,
+      device?.raw,
+      p.auth_epoch,
+      "totp",
+    );
     return { ok: true };
   });
   app.get("/v1/me/devices", async (req, reply) => {
@@ -183,7 +297,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       [user.id],
     );
     const events = await pool.query(
-      "SELECT event,created_at FROM security_events WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",
+      "SELECT id,event,created_at,user_agent FROM security_events WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50",
       [user.id],
     );
     return {
@@ -206,6 +320,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       req.body,
     );
     await transaction(async (c) => {
+      await lockSessionUser(c, user, true);
       const device = (
         await c.query(
           "SELECT id FROM trusted_devices WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE",
@@ -238,6 +353,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
         b.decision === "approve" ? "device_approved" : "device_denied",
         req.ip,
         c,
+        req.headers["user-agent"],
       );
     });
     return { ok: true };
@@ -248,6 +364,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
     if (!(await requireRecentAuth(user, reply))) return;
     await limit("deviceApproval", user.id);
     await transaction(async (c) => {
+      await lockSessionUser(c, user, true);
       const result = await c.query(
         "UPDATE trusted_devices SET revoked_at=now() WHERE id=$1 AND user_id=$2 RETURNING id",
         [itemId(req), user.id],
@@ -261,7 +378,13 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
         "UPDATE device_challenges SET status='denied' WHERE user_id=$1 AND status IN ('pending','approved')",
         [user.id],
       );
-      await securityEvent(user.id, "device_revoked", req.ip, c);
+      await securityEvent(
+        user.id,
+        "device_revoked",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
     });
     return { ok: true };
   });
@@ -274,14 +397,20 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       randomBytes(32).toString("hex"),
     );
     await transaction(async (c) => {
-      await c.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [user.id]);
+      await lockSessionUser(c, user, true);
       await c.query("DELETE FROM recovery_codes WHERE user_id=$1", [user.id]);
       for (const code of codes)
         await c.query(
-          "INSERT INTO recovery_codes(user_id,token_hash) VALUES($1,$2)",
-          [user.id, hashToken(code)],
+          "INSERT INTO recovery_codes(user_id,token_hash,expires_at) VALUES($1,$2,now()+$3::int*interval '1 day')",
+          [user.id, hashToken(code), config.RECOVERY_CODE_DAYS],
         );
-      await securityEvent(user.id, "recovery_codes_regenerated", req.ip, c);
+      await securityEvent(
+        user.id,
+        "recovery_codes_regenerated",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
     });
     return { codes };
   });
@@ -291,6 +420,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
     if (p.status !== "pending")
       throw failure(409, "Request no longer pending.");
     await transaction(async (c) => {
+      await lockPending(c, p);
       const user = (
         await c.query(
           "SELECT email,email_verified_at,recovery_email,recovery_verified_at FROM users WHERE id=$1 FOR UPDATE",
@@ -328,6 +458,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       req.body,
     );
     await transaction(async (c) => {
+      await lockPending(c, p);
       const row = (
         await c.query(
           "SELECT * FROM device_challenges WHERE id=$1 AND token_hash=$2 AND status='pending' AND expires_at>now() FOR UPDATE",
@@ -336,7 +467,7 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
       ).rows[0];
       if (!row) throw failure(409, "Recovery expired or used.");
       const code = await c.query(
-        "DELETE FROM recovery_codes WHERE user_id=$1 AND token_hash=$2 RETURNING user_id",
+        "DELETE FROM recovery_codes WHERE user_id=$1 AND token_hash=$2 AND expires_at>now() RETURNING user_id",
         [p.user_id, hashToken(b.token)],
       );
       if (
@@ -351,6 +482,14 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
         "UPDATE device_challenges SET status='approved',recovery_hash=NULL WHERE id=$1",
         [p.id],
       );
+      await c.query(
+        "UPDATE users SET pending_recovery_email=NULL WHERE id=$1",
+        [p.user_id],
+      );
+      await c.query(
+        "UPDATE email_tokens SET used_at=now() WHERE user_id=$1 AND purpose IN ('verify_recovery','change_email','reset_password') AND used_at IS NULL",
+        [p.user_id],
+      );
       // Recovery is also the lost-device path: invalidate previous sessions/trust.
       await c.query("DELETE FROM sessions WHERE user_id=$1", [p.user_id]);
       await c.query(
@@ -361,7 +500,13 @@ export async function registerDeviceRoutes(app: FastifyInstance) {
         "UPDATE device_challenges SET status='denied' WHERE user_id=$1 AND id<>$2 AND status IN ('pending','approved')",
         [p.user_id, p.id],
       );
-      await securityEvent(p.user_id, "device_recovery_approved", req.ip, c);
+      await securityEvent(
+        p.user_id,
+        "device_recovery_approved",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
     });
     return { ok: true };
   });

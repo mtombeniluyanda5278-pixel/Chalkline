@@ -7,7 +7,10 @@ let secrets;
 try {
   secrets = JSON.parse(await readFile(directory + "/credentials.json", "utf8"));
 } catch (error) {
-  if (error.code !== "ENOENT") throw error;
+  if (error.code !== "ENOENT")
+    throw new Error(
+      "Local credential file could not be read. Restore its matching backup; no credentials were replaced.",
+    );
   secrets = Object.fromEntries(
     ["owner", "app", "test", "redis", "session", "outbox", "rate"].map(
       (key) => [key, randomBytes(32).toString("hex")],
@@ -17,6 +20,20 @@ try {
     mode: 0o600,
     flag: "wx",
   });
+}
+for (const key of [
+  "owner",
+  "app",
+  "test",
+  "redis",
+  "session",
+  "outbox",
+  "rate",
+]) {
+  if (typeof secrets[key] !== "string" || !/^[a-f0-9]{64}$/.test(secrets[key]))
+    throw new Error(
+      "Local credential file is incomplete or invalid. Restore its matching backup; existing credentials were not replaced.",
+    );
 }
 await writeFile(directory + "/owner-password", secrets.owner, { mode: 0o600 });
 await writeFile(directory + "/redis-password", secrets.redis, { mode: 0o600 });

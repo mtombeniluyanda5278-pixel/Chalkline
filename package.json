@@ -8,16 +8,18 @@
     "start": "node dist/index.js",
     "build": "tsc && node scripts/build-static.mjs",
     "test": "node scripts/test.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "migrate": "node scripts/migrate.mjs",
     "preview": "node scripts/serve-static.mjs",
     "test:unit": "node --test tests/*.test.mjs",
     "test:integration": "node scripts/test-integration.mjs",
-    "format:check": "prettier --check app.js workspace.js autosave.js src scripts tests styles.css index.html"
+    "format:check": "prettier --check app.js workspace.js autosave.js src scripts tests styles.css index.html",
+    "db:setup:production": "node scripts/setup-production.mjs"
   },
   "engines": {
-    "node": ">=24"
+    "node": "24.x"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1131.0",
@@ -29,9 +31,12 @@
     "dotenv": "^17.4.2",
     "fastify": "^5.12.1",
     "file-type": "^22.1.0",
+    "google-auth-library": "^11.0.2",
     "ioredis": "^6.0.0",
+    "otpauth": "^9.5.2",
     "pdfjs-dist": "^6.3.289",
     "pg": "^8.23.0",
+    "qrcode": "^1.5.4",
     "saxes": "^6.0.0",
     "yauzl": "^3.4.0",
     "zod": "^4.5.4"
@@ -39,6 +44,7 @@
   "devDependencies": {
     "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
+    "@types/qrcode": "^1.5.6",
     "@types/yauzl": "^3.4.0",
     "@types/yazl": "^3.3.1",
     "jsdom": "^30.0.1",

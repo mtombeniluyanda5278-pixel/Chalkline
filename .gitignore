@@ -15,6 +15,7 @@ public-build/
 !.env.example
 env/
 .venv/
+.venv-*/
 mail/
 *.pem
 *.key
@@ -26,3 +27,10 @@ mail/
 coverage/
 .DS_Store
 .npmrc
+
+# Security-scanner working directories and their reports.
+security-audit-chix-11/
+wapiti-report/
+
+# Local Claude Code settings; the shared config in .claude/ is tracked.
+.claude/settings.local.json

@@ -4,6 +4,74 @@ Stopped on the user's explicit request to conserve their remaining usage limit, 
 
 ## Scope and source
 
+### 11.5 final verification — 2026-09-19
+
+Rechecked the existing implementation on the finalization request. No additional application-code changes were needed. `npm run build` passed and regenerated `public-build`; `npm run test:unit` passed **20/20**; `npm run test:integration` passed **132/132 with no failures or skips**, including isolated database bootstrap and migration checks. `git diff --check` passed.
+
+The first integration attempts could not reach Docker because Colima was stopped and then the sandbox denied socket access. Started the existing Colima runtime and reran successfully with authorized Docker access. The suite used disposable PostgreSQL, Redis, and MinIO containers and removed them afterward. External providers remained mocked. No production migration, deployment, or live-account access was performed.
+
+The focused 11.5 implementation is verified by these checks. Apply migration 018 after 017 with older backend instances stopped, as described in `DEPLOYMENT.md`. The broader historical hardening work and live-provider/browser verification below remain outside this focused completion.
+
+### 11.5 regression verification — 2026-09-19
+
+Resumed the existing top-level changes. Fixed the passkey attestation fixture's CBOR type so TypeScript compilation succeeds. Fixed the upload-reception cancellation regression to wait, with a two-second bound, for the handler's cleanup transaction after the disconnected client settles; quota and deletion-bookkeeping assertions remain in place. Added migration 018 rollout guidance to `DEPLOYMENT.md`.
+
+Current verification: `npm run build` passed and regenerated `public-build`; `npm run test:unit` passed **20/20**; isolated `npm run test:integration` passed **132/132, no failures or skips**, including bootstrap checks, security mutation races, scoped OTPs, recovery expiry, encrypted login notifications, and lease-loss transfer cleanup. `git diff --check` passed. The first integration run exposed the cleanup-test synchronization issue; the final complete rerun passed after that repair.
+
+Integration used disposable PostgreSQL, Redis, and MinIO containers, with generated test credentials and mocked external providers. The existing Colima runtime was started for the run and test containers were cleaned up. No deployment, production migration, live account access, real email/Google-provider validation, or physical-browser/passkey audit was performed. These results validate the current regression suite, not completion of the broader historical audit specification below.
+
+### Passwordless sign-in completion — 2026-09-14
+
+- Email-code signup/sign-in and optional Google OAuth are implemented alongside existing passwords/passkeys. Migration 017 preserves accounts and credentials, adds unique Google subjects, and stores issuance-scoped code hashes with email, credential-epoch, expiry, attempt, and optional session binding. Google uses browser-bound one-use state, nonce, and PKCE; existing email collisions require mailbox proof before linking.
+- Restored the existing transactional account-created notification in passwordless registration. Fixed the frontend request helper to omit JSON Content-Type when there is no body: empty POSTs previously failed server parsing, affecting logout and Google startup. Updated account-deletion guidance for passwordless users and documented local/production Google configuration.
+- Added regressions for rotated-session replay, changed mailboxes, failed outbox transactions, cross-session reauthentication, successful frontend email sign-in, and empty-body Google startup/provider failure. Google exchange/identity responses are simulated; no live Google sign-in or inbox delivery was performed.
+- Final validation: isolated integration passed **106/106 with no failures or skips**, including bootstrap/migration checks and the real frontend logout regression; frontend/unit tests passed **18/18**; TypeScript/static build, focused Prettier checks, and `git diff --check` passed. The first integration run caught the empty-body JSON failure described above; the final run passed after the fix. The broader hardening/audit checklist remains outside this focused completion. No production migration or deployment was performed.
+
+### Brevo, required signup OTP, and password recovery — 2026-09-13
+
+- Supersedes the earlier link-verification repair below. Signup now requires an emailed six-digit OTP; no session is issued before successful verification. Codes expire after 10 minutes by default, use an issuance-scoped keyed hash, allow five guesses, and are consumed under a user lock. Guest resend is rate limited and invalidates the prior code. Migration 016 preserves accounts, removes the country requirement, and invalidates old verification links; pending users request a new code.
+- Fixed the mail worker's incompatible Resend payload. It now supports direct Brevo and the existing `{to, subject, body}` adapter contract. Confirmed the existing API key can read Brevo's active sender and configured that sender privately for localhost. Local development reads only the three Brevo settings from `.env`/`.local/email.env`; automated tests disable real delivery.
+- Removed the country list and signup selector. Added OTP entry, resend, pending-login routing, and account verification navigation. Password recovery now validates forms, handles delivery/reset errors, accepts reset links while signed in, and refreshes session state after completion. A reset does not bypass required signup OTP verification.
+- Validation: **94/94 integration tests**, **13/13 frontend tests**, TypeScript/static build, and diff whitespace checks passed. Local migration applied and localhost health returned 200 with the new frontend served. Brevo request formatting and provider rejection are tested; real inbox delivery awaits a user-provided test recipient. Browser automation could not launch in this environment; DOM tests and HTTP checks supplied UI verification.
+
+
+### Sign-in repair — 2026-09-13
+
+- Repaired a frontend/backend verification mismatch: the frontend had requested a six-digit code while the backend still issued emailed links and required a longer token. Restored link consumption, URL token removal, and successful-verification session refresh handling.
+- Kept the two-step sign-in UI; the email step now uses native form submission (including Enter), and empty passwords are checked before sending a request. Password and passkey sign-in now report an unconfirmed session instead of announcing success when the session read returns unauthenticated.
+- Expanded the frontend regression to cover invalid email, changing email, empty password, device approval, wrong-password retry, missing session cookies, and successful password sign-in.
+- Validation: frontend suite **11/11 passed**, disposable integration suite **89/89 passed with no skips**, and TypeScript/static build passed. These results do not verify a deployed site's API routing, email delivery, or a physical browser authenticator and do not close the broader unfinished work below.
+
+
+### ZIP 9 focused repair and validation — 2026-09-13
+
+This is current evidence for the focused ZIP 9 repair, superseding historical test totals below; it does not close the broader rollout/audit specification.
+
+- Confirmed and repaired the malformed passkey login schema reference. Malformed and unknown credentials return 401. Passkey step-up now uses the shared session predicate in valid `UPDATE ... FROM` SQL, including administrator idle expiry; a signed-assertion regression expires the session between authentication read and verification update.
+- Local startup now provisions/restricts both databases before either runtime starts, revoking PUBLIC and opposite-role CONNECT privileges. Disposable bootstrap checks passed in both startup orders, including fresh/repeated setup, stale runtime passwords, runtime schema repair, migration-owner repair with demonstrated read/create denial under a non-superuser, restricted runtime privileges, migration-ledger denial, and exact non-default quotas for both plans.
+- Added `npm run db:setup:production` with separate operator migration/runtime URLs. The actual command passed on fresh disposable PostgreSQL databases; repeated setup and backend RLS reads/writes also passed. Deployment documentation states that permissive backend RLS policies rely on application authorization for tenant isolation and explains both provider-neutral hosting arrangements.
+- New privacy tests exposed registration rate-limit state leaking across test cases. Each auth test now clears its test rate-limit buckets; production rate limits and permissions are unchanged.
+
+Commands and current results: `npm run build` passed and refreshed `public-build`; `npm run test:unit` passed 11/11 with no skips; final `npm run test:integration` passed its bootstrap checks and its nested `npm test` passed 89/89 with no failures or skips, including storage. Earlier attempts caught an invalid database-creation SQL form (fixed) and three rate-limit-contaminated tests (fixed). `git diff --check` passed. Ordinary `npm test` excludes the separate frontend suite and can skip storage tests; use the complete validation sequence in README.
+
+Existing accounts, databases, Docker volumes, real `.env` and all existing migrations were preserved. No migration was needed, and nothing was pushed or deployed. Temporary test credentials were generated in mode-0600 files and removed with the disposable containers; no persistent secret-bearing file was introduced. No focused repair blocker remains; the broader deployment hold and live-provider/browser/audit work described below remain outside this pass.
+
+### Broader hardening resumption — 2026-09-13
+
+Resumed from the clean `d3da3f2` checkpoint. This section supersedes conflicting historical descriptions below; the broad specification and its separate audits remain unfinished.
+
+- Connected the existing renewable Redis scan limiter to actual job processing. Full capacity leaves queued jobs and attempt counts untouched. Scan work receives cancellation and a four-minute deadline before its five-minute database claim expires; results cannot be published after the claim expires. Capacity is released on success, failure and empty queues.
+- Enforced `ADMIN_IDLE_MAX_MINUTES` for existing and new administrator sessions through the shared authentication/session-list predicate, also reused by passkey confirmation. Sensitive admin transactions revalidate role, session, five-minute authentication and the configured passkey policy.
+- Feedback discards diagnostics unless explicitly opted in, validates opted-in fields against the strict allowlist, and acknowledges creation only after transaction commit. Added a forced commit-failure regression.
+- Spreadsheet expansion now checks output size while building rows, before accumulating repeated shared strings. Added fixtures for shared/inline/cached cells, workbook sheet names, presentation relationship order, missing shared strings, excessive expansion, DTDs, external/escaping relationships, embedded executables, duplicate entries and malformed XML.
+- Added local ClamAV protocol-server tests for framed streaming, health, infection, malformed/oversized/extra responses, timeouts, cancellation and file limits. These are protocol simulations, not a live ClamAV engine certification.
+- Added audited operator-only admin bootstrap with active/verified-account checks, optional passkey prerequisite and existing-session revocation. See [administrator operations](ADMIN-OPERATIONS.md). No account was promoted outside the isolated tests.
+- Regression coverage now includes all existing admin route guest/user denials, mass assignment, contact masking and audited reveal, step-up expiry, admin idle expiry, suspension, mandatory passkey gating, teacher-content isolation, feedback ownership/consent, bootstrap, and renewable concurrency lease loss/release.
+
+Reconciliation of earlier implementation notes: the starting code already requires email verification before issuing the first registration session; persists dedicated development outbox/rate-limit keys; supports explicit previous outbox keys and a rotation command; renews transfer leases; resolves spreadsheet shared strings and presentation relationship order; and passes provider idempotency headers. Those implementations still need the remaining rollout, browser, provider and resilience work described by the specification. The old “verification-first decision pending,” process-local key generation, missing lease renewal and filename-only slide ordering statements are historical, not current defects.
+
+Final verification: `npm run build` passed; isolated `npm run test:integration` passed **84/84, no failures or skips**; `npm run test:unit` passed **11/11**; Prettier passed for all changed TypeScript files; `git diff --check` passed. These test totals are not a claim that the specification's separate 95-scenario matrix is complete. Integration used temporary PostgreSQL, Redis and MinIO containers, plus the private scanner mock and a local protocol test server. Colima was started because its existing Docker runtime was stopped; test containers were cleaned up. No production migration, deployment, live-provider test, dependency audit or real-browser audit was performed in this resumption.
+
 ### Closed auth/local-development follow-up — 2026-09-12
 
 Retained logout/refresh regressions; cookie expiry now follows database expiry. Active-session listing shares authentication validity checks and omits IPs. Added dedicated user/session-bound passkey step-up, typed trustDevice propagation, conditional trust events, fresh-password authorization, safe post-commit registration partial success, and generic registration conflicts. Homepage CTAs now follow server-backed auth state, with navigation/share regressions. The normal `docker compose up -d` / `npm run dev` workflow serves the full app at `http://127.0.0.1:3000`, using generated ignored local credentials, separate persistent local volumes and restricted runtime/test roles. Existing `.env` files and migrations 001–012 were not edited.

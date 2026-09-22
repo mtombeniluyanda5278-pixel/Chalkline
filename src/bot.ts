@@ -4,7 +4,11 @@ import { redis, opaqueIdentity, buckets } from "./rateLimit.js";
 import { limit } from "./http.js";
 export async function verifyBot(token: string | undefined, action: string) {
   if (config.BOT_PROTECTION_PROVIDER === "disabled")
-    throw failure(503, "Human verification is temporarily unavailable.");
+    throw failure(
+      503,
+      "Too many attempts. Please try again in about an hour.",
+      { expose: true },
+    );
   if (!token)
     throw Object.assign(
       failure(403, "Complete human verification to continue."),
@@ -67,8 +71,13 @@ export async function loginProtection(
   const counts = (await redis.mget(...keys)).map(Number);
   // An account-wide risk signal requires proof; only the attacking IP/pair is
   // throttled, so a stranger cannot lock every browser out of another account.
-  if (counts[1]! >= config.LOGIN_FAILURE_IP_MAX || counts[2]! >= config.LOGIN_STRONG_THROTTLE_AFTER) {
-    const ttl = await redis.ttl(keys[counts[1]! >= config.LOGIN_FAILURE_IP_MAX ? 1 : 2]!);
+  if (
+    counts[1]! >= config.LOGIN_FAILURE_IP_MAX ||
+    counts[2]! >= config.LOGIN_STRONG_THROTTLE_AFTER
+  ) {
+    const ttl = await redis.ttl(
+      keys[counts[1]! >= config.LOGIN_FAILURE_IP_MAX ? 1 : 2]!,
+    );
     throw Object.assign(failure(429, "Too many attempts. Try again later."), {
       retryAfter: Math.max(1, ttl),
     });

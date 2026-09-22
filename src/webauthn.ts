@@ -16,7 +16,12 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { pool } from "./db.js";
 import { requireRecentAuth, requireUser } from "./auth.js";
-import { createSession, setSessionCookie } from "./sessions.js";
+import {
+  lockSessionUser,
+  createSession,
+  setSessionCookie,
+  validSession,
+} from "./sessions.js";
 import { clientIp, consumeRateLimit, redis } from "./rateLimit.js";
 
 const WebAuthnRegistrationResponseSchema = z.strictObject({
@@ -129,7 +134,7 @@ export async function registerWebAuthnRoutes(
         type: "public-key" as const,
       })),
       authenticatorSelection: {
-        residentKey: "preferred",
+        residentKey: "required",
         userVerification: "required",
       },
     });
@@ -204,18 +209,28 @@ export async function registerWebAuthnRoutes(
     const info = verification.registrationInfo;
 
     try {
-      await pool.query(
-        `INSERT INTO webauthn_credentials
+      await transaction(async (c) => {
+        await lockSessionUser(c, sessionUser, true);
+        await c.query(
+          `INSERT INTO webauthn_credentials
           (user_id, credential_id, public_key, counter, device_name)
          VALUES ($1, $2, $3, $4, $5)`,
-        [
+          [
+            sessionUser.id,
+            Buffer.from(info.credential.id, "base64url"),
+            Buffer.from(info.credential.publicKey),
+            info.credential.counter,
+            deviceName,
+          ],
+        );
+        await securityEvent(
           sessionUser.id,
-          Buffer.from(info.credential.id, "base64url"),
-          Buffer.from(info.credential.publicKey),
-          info.credential.counter,
-          deviceName,
-        ],
-      );
+          "passkey_added",
+          req.ip,
+          c,
+          req.headers["user-agent"],
+        );
+      });
     } catch (error: unknown) {
       // credential_id is UNIQUE, so don't expose database details to clients.
       const message = error instanceof Error ? error.message.toLowerCase() : "";
@@ -233,7 +248,6 @@ export async function registerWebAuthnRoutes(
       throw error;
     }
 
-    await securityEvent(sessionUser.id, "passkey_added", req.ip);
     return { ok: true };
   });
 
@@ -286,21 +300,8 @@ export async function registerWebAuthnRoutes(
     const { id } = req.params as { id: string };
 
     const authEpoch = await transaction(async (c) => {
-      const user = (
-        await c.query(
-          "SELECT password_hash FROM users WHERE id=$1 FOR UPDATE",
-          [sessionUser.id],
-        )
-      ).rows[0];
+      const user = await lockSessionUser(c, sessionUser, true);
       if (!user) throw failure(404, "Account not found.");
-      if (!user.password_hash) {
-        const count = await c.query(
-          "SELECT count(*) FROM webauthn_credentials WHERE user_id=$1",
-          [sessionUser.id],
-        );
-        if (Number(count.rows[0].count) <= 1)
-          throw failure(400, "Cannot remove your only sign-in method.");
-      }
       const result = await c.query(
         "DELETE FROM webauthn_credentials WHERE id=$1 AND user_id=$2",
         [id, sessionUser.id],
@@ -311,7 +312,13 @@ export async function registerWebAuthnRoutes(
         [sessionUser.id],
       );
       await c.query("DELETE FROM sessions WHERE user_id=$1", [sessionUser.id]);
-      await securityEvent(sessionUser.id, "passkey_removed", req.ip, c);
+      await securityEvent(
+        sessionUser.id,
+        "passkey_removed",
+        req.ip,
+        c,
+        req.headers["user-agent"],
+      );
       return changed.rows[0].auth_epoch as number;
     });
     const session = await createSession(sessionUser.id, {
@@ -319,6 +326,9 @@ export async function registerWebAuthnRoutes(
       userAgent: req.headers["user-agent"],
       deviceId: sessionUser.deviceId ?? undefined,
       authEpoch,
+      // Removing a passkey rotates the session but does not re-authenticate it,
+      // so it keeps whatever factor the caller actually signed in with.
+      authMethod: sessionUser.authMethod,
     });
     setSessionCookie(reply, session);
     return { ok: true };
@@ -369,6 +379,7 @@ export async function registerWebAuthnRoutes(
         .send({ error: "Passkey confirmation expired or invalid." });
     try {
       await transaction(async (c) => {
+        await lockSessionUser(c, user);
         const credentialId = Buffer.from(parsed.data.id, "base64url");
         const row = (
           await c.query(
@@ -394,9 +405,7 @@ export async function registerWebAuthnRoutes(
         const updated = await c.query(
           `UPDATE sessions s SET reauthenticated_at=now(),auth_method='passkey'
           FROM users u WHERE s.id=$1 AND s.user_id=$2 AND u.id=s.user_id
-          AND s.auth_epoch=u.auth_epoch AND u.suspended_at IS NULL AND s.expires_at>now()
-          AND s.last_active_at+s.idle_seconds*interval '1 second'>now()
-          AND (s.device_id IS NULL OR EXISTS(SELECT 1 FROM trusted_devices d WHERE d.id=s.device_id AND d.user_id=u.id AND d.revoked_at IS NULL AND d.expires_at>now())) RETURNING s.id`,
+          AND ${validSession} RETURNING s.id`,
           [user.sessionId, user.id],
         );
         if (!updated.rowCount)

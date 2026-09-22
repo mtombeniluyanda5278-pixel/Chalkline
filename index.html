@@ -8,14 +8,41 @@
       name="description"
       content="A calmer space for your teaching day. Plan lessons, gather resources, and pick up where you left off."
     />
+    <script src="theme.js"></script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to main content</a>
 
+    <template id="theme-control-template">
+      <label class="theme" for="theme-toggle">
+        <span class="sr-only">Dark theme</span>
+        <span class="theme__toggle-wrap">
+          <input
+            class="theme__toggle"
+            id="theme-toggle"
+            type="checkbox"
+            role="switch"
+          />
+          <span class="theme__icon" aria-hidden="true">
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+            <span class="theme__icon-part"></span>
+          </span>
+        </span>
+      </label>
+    </template>
+
     <header class="site-header">
       <div class="site-header__inner">
         <a class="wordmark" href="#/">Chix</a>
+
         <nav
           class="site-nav"
           id="site-nav"

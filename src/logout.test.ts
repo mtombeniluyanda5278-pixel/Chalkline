@@ -1,4 +1,4 @@
-import { registerVerifiedAccount } from "./testAccounts.js";
+import { registerVerifiedAccount, loginCode } from "./testAccounts.js";
 import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -25,11 +25,16 @@ after(async () => {
 async function browserSession() {
   const jar = new CookieJar();
   const requests: { path: string; status: number }[] = [];
-  async function request(path: string, method = "GET", payload?: object) {
+  async function request(
+    path: string,
+    method = "GET",
+    payload?: object,
+    headers: Record<string, string> = {},
+  ) {
     const response = await app.inject({
       method: method as "GET" | "POST",
       url: path,
-      headers: { cookie: jar.getCookieStringSync(origin + path) },
+      headers: { ...headers, cookie: jar.getCookieStringSync(origin + path) },
       ...(payload === undefined ? {} : { payload }),
     });
     for (const cookie of [response.headers["set-cookie"]]
@@ -48,11 +53,12 @@ async function browserSession() {
     dateOfBirth: "2000-01-01",
     email: `logout-${suffix}@example.com`,
     username: `r.${suffix}`,
-    password: "correct horse battery staple",
-    confirmPassword: "correct horse battery staple",
     trustDevice: true,
   });
-  for (const cookie of [registered.headers["set-cookie"]].flat().filter(Boolean)) jar.setCookieSync(cookie, origin+"/v1/auth/verify-email");
+  for (const cookie of [registered.headers["set-cookie"]]
+    .flat()
+    .filter(Boolean))
+    jar.setCookieSync(cookie, origin + "/v1/auth/verify-email");
   assert.equal(registered.statusCode, 201, registered.body);
   const id = registered.json().user.id;
   users.push(id);
@@ -133,7 +139,9 @@ test("A/B/C: logout destroys the original token, expires its browser cookie, and
 test("logout revokes duplicate session cookies from legacy domain/path scopes", async () => {
   for (const scope of ["Domain=example.test; Path=/", "Path=/v1"]) {
     const b = await browserSession();
-    const { token: legacy } = await createSession(b.id, {});
+    const { token: legacy } = await createSession(b.id, {
+      authMethod: "email_otp",
+    });
     b.jar.setCookieSync(
       `chalkline_session=${legacy}; ${scope}; HttpOnly`,
       origin + "/v1/auth/logout",
@@ -163,9 +171,16 @@ test("logout revokes duplicate session cookies from legacy domain/path scopes", 
       );
     }
     assert.equal((await b.request("/v1/me")).statusCode, 401);
-    const login = await b.request("/v1/auth/login", "POST", {
-      email: b.registered.json().user.email,
-      password: "correct horse battery staple",
+    // Signs in through the cookie jar so the new session cookie lands beside
+    // the revoked legacy ones, which is what this test is about.
+    const email = b.registered.json().user.email;
+    const requested = await b.request("/v1/auth/otp/request", "POST", {
+      email,
+    });
+    assert.equal(requested.statusCode, 200, requested.body);
+    const login = await b.request("/v1/auth/otp/verify", "POST", {
+      email,
+      code: await loginCode(email),
     });
     assert.equal(login.statusCode, 200, login.body);
     assert.equal(
@@ -215,6 +230,7 @@ test("D/E: real frontend startup preserves a valid session, logout clears state,
       path,
       options.method,
       options.body ? JSON.parse(options.body) : undefined,
+      options.headers,
     );
     // Capture the actual authenticated response, then deliver it after logout.
     if (path === "/v1/me" && delayNextMe) {
@@ -262,15 +278,15 @@ test("D/E: real frontend startup preserves a valid session, logout clears state,
   try {
     let page = await startup();
     assert.equal(page.frontend.state.user.id, b.id);
-   assert.match(
-  page.dom.window.document.querySelector("#site-nav").textContent,
-  /Sign out/,
-);
+    assert.match(
+      page.dom.window.document.querySelector("#site-nav").textContent,
+      /Sign out/,
+    );
 
-assert.match(
-  page.dom.window.document.querySelector("#site-nav").textContent,
-  /Account/,
-);
+    assert.match(
+      page.dom.window.document.querySelector("#site-nav").textContent,
+      /Account/,
+    );
     page.dom.window.close();
     page = await startup();
     assert.equal(
@@ -308,14 +324,14 @@ assert.match(
     );
     await until(() => page.dom.window.document.body.dataset.view === "home");
     assert.doesNotMatch(
-  page.dom.window.document.querySelector("#site-nav").textContent,
-  /Sign out/,
-);
+      page.dom.window.document.querySelector("#site-nav").textContent,
+      /Sign out/,
+    );
 
-assert.doesNotMatch(
-  page.dom.window.document.querySelector("#site-nav").textContent,
-  /Account/,
-);
+    assert.doesNotMatch(
+      page.dom.window.document.querySelector("#site-nav").textContent,
+      /Account/,
+    );
     assert.equal(await page.frontend.loadSession(), false);
     assert.equal(page.frontend.state.user, null);
     page.dom.window.close();

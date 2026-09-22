@@ -6,7 +6,14 @@ const files = new Map([
   ["/index.html", "index.html"],
   ["/styles.css", "styles.css"],
   ["/app.js", "app.js"],
+  ["/theme.js", "theme.js"],
   ["/workspace.js", "workspace.js"],
+  ["/lessons.js", "lessons.js"],
+  ["/loading.js", "loading.js"],
+  ["/authenticator-ui.js", "authenticator-ui.js"],
+  ["/extras.js", "extras.js"],
+  ["/readers.js", "readers.js"],
+  ["/resource-preview.js", "resource-preview.js"],
   ["/autosave.js", "autosave.js"],
 ]);
 createServer(async (req, res) => {

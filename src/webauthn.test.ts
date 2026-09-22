@@ -1,4 +1,4 @@
-import { registerVerifiedAccount, verificationToken } from "./testAccounts.js";
+import { registerVerifiedAccount } from "./testAccounts.js";
 import { test, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -26,8 +26,6 @@ function validRegistration(overrides: Record<string, unknown> = {}) {
     country: "ZA",
     dateOfBirth: "2000-01-01",
     email: `webauthn-${id}@example.com`,
-    password: "correct horse battery staple",
-    confirmPassword: "correct horse battery staple",
     username: `webauthn.${id.slice(0, 6)}`,
     phone: "+27821234567",
     address: {
@@ -215,4 +213,20 @@ test("passkey login verify rejects a missing challenge", async () => {
   assert.deepEqual(response.json(), {
     error: "Challenge expired. Start again.",
   });
+});
+
+test("passkey login rejects malformed credentials with 401", async () => {
+  const options = await app.inject({
+    method: "POST",
+    url: "/v1/auth/passkeys/login/options",
+  });
+  const header = options.headers["set-cookie"]!;
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/auth/passkeys/login/verify",
+    headers: { cookie: Array.isArray(header) ? header[0] : header },
+    payload: {},
+  });
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(response.json(), { error: "Passkey sign-in failed." });
 });

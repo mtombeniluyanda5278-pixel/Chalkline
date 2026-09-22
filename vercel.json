@@ -1,11 +1,5 @@
 {
   "outputDirectory": "public-build",
-  "rewrites": [
-    {
-      "source": "/v1/:path*",
-      "destination": "https://chalkline-rn07.onrender.com/v1/:path*"
-    }
-  ],
   "buildCommand": "npm run build",
   "headers": [
     {
@@ -13,7 +7,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://js.hcaptcha.com https://*.hcaptcha.com; worker-src 'self'; style-src 'self' https://*.hcaptcha.com; img-src 'self' data: blob: https://*.hcaptcha.com; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com; object-src 'none'; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+          "value": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://js.hcaptcha.com https://*.hcaptcha.com; worker-src 'self'; style-src 'self' https://*.hcaptcha.com; img-src 'self' data: blob: https://i.ytimg.com https://*.hcaptcha.com; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com; object-src 'none'; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         },
         {
           "key": "X-Content-Type-Options",

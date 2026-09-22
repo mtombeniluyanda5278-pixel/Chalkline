@@ -1,4 +1,4 @@
-import { Readable } from "node:stream";
+import { addAbortSignal, Readable } from "node:stream";
 import {
   S3Client,
   PutObjectCommand,
@@ -9,9 +9,14 @@ import {
 import { config } from "./config.js";
 import { failure } from "./http.js";
 export interface ObjectStore {
-  put(key: string, body: Buffer | Readable, size?: number): Promise<void>;
-  stream(key: string): Promise<Readable>;
-  get(key: string): Promise<Buffer>;
+  put(
+    key: string,
+    body: Buffer | Readable,
+    size?: number,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  stream(key: string, signal?: AbortSignal): Promise<Readable>;
+  get(key: string, signal?: AbortSignal): Promise<Buffer>;
   delete(key: string): Promise<void>;
 }
 export function storageConfigured() {
@@ -41,27 +46,54 @@ export function objectStore(): ObjectStore {
   });
   const Bucket = config.STORAGE_BUCKET!;
   instance = {
-    async put(Key, Body, size) {
+    async put(Key, Body, size, signal) {
+      const cancellation = AbortSignal.any([
+        AbortSignal.timeout(60000),
+        ...(signal ? [signal] : []),
+      ]);
+      cancellation.throwIfAborted();
+      if (Body instanceof Readable) addAbortSignal(cancellation, Body);
       await client.send(
         new PutObjectCommand({
           Bucket,
           Key,
           Body,
-          ContentLength: size ?? (Buffer.isBuffer(Body) ? Body.length : undefined),
+          ContentLength:
+            size ?? (Buffer.isBuffer(Body) ? Body.length : undefined),
           ContentType: "application/octet-stream",
         }),
-        { abortSignal: AbortSignal.timeout(60000) },
+        { abortSignal: cancellation },
       );
+      cancellation.throwIfAborted();
     },
-    async stream(Key) {
-      const r=await client.send(new GetObjectCommand({Bucket,Key}),{abortSignal:AbortSignal.timeout(60000)});
-      if(!r.Body)throw failure(404,"File unavailable.");
-      if(Number(r.ContentLength)>config.UPLOAD_MAX_BYTES) { (r.Body as Readable).destroy();throw failure(413,"File too large."); }
-      return r.Body as Readable;
+    async stream(Key, signal) {
+      const cancellation = AbortSignal.any([
+        AbortSignal.timeout(60000),
+        ...(signal ? [signal] : []),
+      ]);
+      cancellation.throwIfAborted();
+      const r = await client.send(new GetObjectCommand({ Bucket, Key }), {
+        abortSignal: cancellation,
+      });
+      if (!r.Body) throw failure(404, "File unavailable.");
+      if (Number(r.ContentLength) > config.UPLOAD_MAX_BYTES) {
+        (r.Body as Readable).destroy();
+        throw failure(413, "File too large.");
+      }
+      return addAbortSignal(cancellation, r.Body as Readable);
     },
-    async get(Key) {
-      const chunks:Buffer[]=[];let size=0;const stream=await this.stream(Key);
-      for await(const chunk of stream){size+=chunk.length;if(size>config.UPLOAD_MAX_BYTES){stream.destroy();throw failure(413,"File too large.");}chunks.push(chunk);}
+    async get(Key, signal) {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      const stream = await this.stream(Key, signal);
+      for await (const chunk of stream) {
+        size += chunk.length;
+        if (size > config.UPLOAD_MAX_BYTES) {
+          stream.destroy();
+          throw failure(413, "File too large.");
+        }
+        chunks.push(chunk);
+      }
       return Buffer.concat(chunks);
     },
     async delete(Key) {

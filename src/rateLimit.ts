@@ -15,9 +15,14 @@ export const redis = new Redis(config.REDIS_URL, {
 });
 
 const defaults = {
+  timetablePhoto: { max: 10, windowMs: 60 * 60 * 1000 },
+  authenticatorSetup: { max: 5, windowMs: 15 * 60 * 1000 },
+  authenticatorVerify: { max: 5, windowMs: 5 * 60 * 1000 },
+  authenticatorLoginIp: { max: 30, windowMs: 15 * 60 * 1000 },
   login: { max: 30, windowMs: 15 * 60 * 1000 },
   signup: { max: 5, windowMs: 60 * 60 * 1000 },
   passwordReset: { max: 3, windowMs: 60 * 60 * 1000 },
+  verifyEmailAttempt: { max: 10, windowMs: 15 * 60 * 1000 },
   passwordResetIp: { max: 10, windowMs: 60 * 60 * 1000 },
   accountDiscovery: { max: 3, windowMs: 60 * 60 * 1000 },
   accountDiscoveryIp: { max: 10, windowMs: 60 * 60 * 1000 },

@@ -47,11 +47,15 @@ export const RegisterInput = z
       .string()
       .trim()
       .toUpperCase()
-      .regex(/^[A-Z]{2}$/),
-    dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      .regex(/^[A-Z]{2}$/)
+      .optional(),
+    dateOfBirth: z
+      .string()
+      .regex(
+        /^\d{4}-\d{2}-\d{2}$/,
+        "Enter a complete date of birth (YYYY-MM-DD).",
+      ),
     email: z.string().trim().email().max(254).toLowerCase(),
-    password: z.string().min(12).max(72),
-    confirmPassword: z.string(),
     username: z
       .string()
       .trim()
@@ -81,13 +85,6 @@ export const RegisterInput = z
     marketingApps: z.boolean().default(false),
   })
   .superRefine((data, ctx) => {
-    if (data.password !== data.confirmPassword) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["confirmPassword"],
-        message: "Passwords do not match",
-      });
-    }
     if (RESERVED_USERNAMES.has(data.username)) {
       ctx.addIssue({
         code: "custom",
@@ -98,13 +95,20 @@ export const RegisterInput = z
     const dob = new Date(`${data.dateOfBirth}T00:00:00Z`);
     if (
       Number.isNaN(dob.getTime()) ||
-      dob.toISOString().slice(0, 10) !== data.dateOfBirth ||
-      yearsAgo(dob, data.timezone) < config.MIN_ACCOUNT_AGE_YEARS
+      dob.toISOString().slice(0, 10) !== data.dateOfBirth
     ) {
       ctx.addIssue({
         code: "custom",
         path: ["dateOfBirth"],
-        message: `You must be at least ${config.MIN_ACCOUNT_AGE_YEARS}`,
+        message: "Enter a valid calendar date for your date of birth.",
+      });
+      return;
+    }
+    if (yearsAgo(dob, data.timezone) < config.MIN_ACCOUNT_AGE_YEARS) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["dateOfBirth"],
+        message: `You must be at least ${config.MIN_ACCOUNT_AGE_YEARS} years old to create an account.`,
       });
     }
   });
@@ -117,7 +121,8 @@ export const LoginInput = z.strictObject({
 });
 
 export const VerifyEmailInput = z.strictObject({
-  token: z.string().min(20).max(200),
+  email: z.string().trim().email().max(254).toLowerCase(),
+  code: z.string().regex(/^[0-9]{6}$/),
 });
 
 export const AccountDeleteInput = z.strictObject({
@@ -159,7 +164,6 @@ export const ProfileUpdateInput = z.strictObject({
 
 export const EmailChangeInput = z.strictObject({
   email: z.string().trim().email().max(254).toLowerCase(),
-  currentPassword: z.string().min(1).max(72),
 });
 
 export const UsernameChangeInput = z
@@ -169,7 +173,6 @@ export const UsernameChangeInput = z
       .trim()
       .toLowerCase()
       .regex(/^[a-z0-9._]{3,20}$/),
-    currentPassword: z.string().min(1).max(72),
   })
   .superRefine((data, ctx) => {
     if (RESERVED_USERNAMES.has(data.username)) {
@@ -186,5 +189,4 @@ export const PhoneChangeInput = z.strictObject({
     .string()
     .trim()
     .regex(/^\+[1-9]\d{7,14}$/, "Use E.164, e.g. +27111234567"),
-  currentPassword: z.string().min(1).max(72),
 });

@@ -1,4 +1,6 @@
+import { bootstrapChecks } from "./bootstrap-checks.mjs";
 import pgDriver from "pg";
+import { ensureRuntimeRole, prepareDatabase } from "./local-bootstrap.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -72,6 +74,7 @@ try {
   const env = {
     ...process.env,
     NODE_ENV: "test",
+    DOTENV_CONFIG_PATH: ".local/no-dotenv",
     CHIX_ISOLATED_TEST: "true",
     DATABASE_URL: `postgresql://test_runner:${password}@127.0.0.1:${port(pg)}/chalkline_test`,
     REDIS_URL: `redis://:${password}@127.0.0.1:${port(redis)}/15`,
@@ -90,6 +93,10 @@ try {
     STORAGE_BUCKET: "chalkline-tests",
     STORAGE_ACCESS_KEY_ID: "test_runner",
     STORAGE_SECRET_ACCESS_KEY: password,
+    GOOGLE_CLIENT_ID: "",
+    GOOGLE_CLIENT_SECRET: "",
+    BREVO_API_KEY: "",
+    BREVO_SENDER_EMAIL: "",
     EMAIL_DELIVERY_URL: "",
     EMAIL_DELIVERY_TOKEN: "",
     EMAIL_REQUIRED: "false",
@@ -116,17 +123,83 @@ try {
     await new Promise((r) => setTimeout(r, 500));
   }
   if (!ready) throw new Error("Isolated services did not become ready.");
-  const migration = spawnSync("node", ["scripts/migrate.mjs"], {
-    env,
-    stdio: "inherit",
-  });
-  if (migration.status !== 0) throw new Error("Migration failed.");
-  // Check idempotency/checksum ledger without replaying applied DDL.
-  const repeated = spawnSync("node", ["scripts/migrate.mjs"], {
-    env,
-    stdio: "inherit",
-  });
-  if (repeated.status !== 0) throw new Error("Migration repeat failed.");
+  env.LOCAL_OWNER_URL = env.DATABASE_URL;
+  await bootstrapChecks(env);
+  const runtimeUrl = new URL(env.DATABASE_URL);
+  runtimeUrl.username = "chalkline_test_app";
+  runtimeUrl.password = randomBytes(32).toString("hex");
+  env.DATABASE_URL = runtimeUrl.toString();
+  const owner = new pgDriver.Client({ connectionString: env.LOCAL_OWNER_URL });
+  await owner.connect();
+  try {
+    await ensureRuntimeRole(owner, env);
+    await prepareDatabase(env);
+    // Reproduce stale credentials and missing schema USAGE without touching
+    // persistent databases. The same bootstrap must repair both on repeat.
+    const drift = (
+      await owner.query(
+        "SELECT format('ALTER ROLE chalkline_test_app PASSWORD %L',$1::text) AS sql",
+        [randomBytes(32).toString("hex")],
+      )
+    ).rows[0].sql;
+    await owner.query(drift);
+    const stale = new pgDriver.Client({ connectionString: env.DATABASE_URL });
+    try {
+      await stale.connect();
+      throw new Error("Stale credential reproduction failed");
+    } catch (error) {
+      if (error.code !== "28P01") throw error;
+    } finally {
+      await stale.end().catch(() => {});
+    }
+    await ensureRuntimeRole(owner, env);
+    await owner.query(
+      "REVOKE USAGE ON SCHEMA public FROM PUBLIC,chalkline_test_app",
+    );
+    const denied = new pgDriver.Client({ connectionString: env.DATABASE_URL });
+    await denied.connect();
+    try {
+      try {
+        await denied.query("SELECT count(*) FROM public.plans");
+        throw new Error("Schema denial reproduction failed");
+      } catch (error) {
+        if (error.code !== "42501") throw error;
+      }
+    } finally {
+      await denied.end();
+    }
+    await prepareDatabase(env);
+    const runtime = new pgDriver.Client({ connectionString: env.DATABASE_URL });
+    await runtime.connect();
+    try {
+      const privileges = (
+        await runtime.query(
+          "SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls,has_schema_privilege(current_user,'public','CREATE') AS ddl FROM pg_roles WHERE rolname=current_user",
+        )
+      ).rows[0];
+      if (Object.values(privileges).some(Boolean))
+        throw new Error("Runtime role is overprivileged");
+      const plans = (
+        await runtime.query("SELECT code FROM plans ORDER BY code")
+      ).rows;
+      if (plans.map((p) => p.code).join(",") !== "FREE_BETA,UNVERIFIED")
+        throw new Error("Plan seeding failed");
+      try {
+        await runtime.query("SELECT * FROM schema_migrations");
+        throw new Error("Migration ledger exposed to runtime");
+      } catch (error) {
+        if (error.code !== "42501") throw error;
+      }
+    } finally {
+      await runtime.end();
+    }
+    console.log(
+      "Fresh/repeated bootstrap, password drift, schema-grant repair, plans and restricted runtime checks passed.",
+    );
+  } finally {
+    await owner.end();
+  }
+  delete env.LOCAL_OWNER_URL;
   const tests = spawnSync("npm", ["test"], { env, stdio: "inherit" });
   process.exitCode = tests.status ?? 1;
 } finally {

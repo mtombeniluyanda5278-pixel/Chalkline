@@ -1,3 +1,14 @@
+import { createLoader } from "./loading.js";
+import { createResourcePreview, resourceType } from "./resource-preview.js";
+import {
+  setupTeaching,
+  lessonControls,
+  resourcePanel,
+  resourceAnchor,
+  videoLinkForm,
+  selectField,
+  CATEGORIES,
+} from "./lessons.js";
 import { mountReader } from "./readers.js";
 import { createAutosave } from "./autosave.js";
 let ui,
@@ -5,6 +16,7 @@ let ui,
   cleanup = () => {};
 export function setupWorkspace(helpers) {
   ui = helpers;
+  setupTeaching(helpers);
 }
 const E = (...args) => ui.el(...args);
 const api = (...args) => ui.apiFetch(...args);
@@ -53,30 +65,40 @@ const friendlyDate = (value) =>
       })
     : "Not scheduled";
 const dateOnly = (value) => (value ? String(value).slice(0, 10) : "");
-function list(items, kind) {
+function list(items, kind, preview) {
   return E(
     "div",
-    { class: "work-list" },
+    { class: preview ? "resource-grid" : "work-list" },
     items.length
       ? items.map((item) =>
           E(
             "a",
             {
-              class: "work-row",
+              class: preview ? "resource-card" : "work-row",
+              ...(item.external_url && !preview
+                ? { target: "_blank", rel: "noopener noreferrer" }
+                : {}),
               href:
+                (!preview && item.external_url) ||
                 "#" +
-                (kind === "file"
-                  ? "/file?id=" + item.id
-                  : "/editor?id=" + item.id),
+                  (kind === "file"
+                    ? "/file?id=" + item.id
+                    : "/editor?id=" + item.id),
             },
             [
-              E(
-                "span",
-                { class: "work-icon", "aria-hidden": "true" },
-                kind === "file" ? "↗" : "≡",
-              ),
+              preview
+                ? preview(item)
+                : E(
+                    "span",
+                    { class: "work-icon", "aria-hidden": "true" },
+                    kind === "file" ? "↗" : "≡",
+                  ),
               E("span", {}, [
-                E("strong", {}, item.title),
+                E(
+                  "strong",
+                  {},
+                  item.title + (item.external_url ? " · Video link ↗" : ""),
+                ),
                 ...(item.status && item.status !== "ready"
                   ? [
                       E(
@@ -279,7 +301,10 @@ export async function renderHome() {
 export async function renderDashboard(scheduleOnly = false) {
   const root = ui.viewRoot;
   const data = await api("/v1/workspace?today=" + today());
-  if (scheduleOnly) root.append(head("Your teaching schedule", "A clear view of what’s coming next."));
+  if (scheduleOnly)
+    root.append(
+      head("Your teaching schedule", "A clear view of what’s coming next."),
+    );
   if (scheduleOnly) {
     const f = ui.field({ label: "View lessons on a date", type: "date" });
     f.input.value = today();
@@ -311,50 +336,83 @@ export async function renderDashboard(scheduleOnly = false) {
     return;
   }
 
-  const home = E("div", {class:"workspace-home"});
+  const home = E("div", { class: "workspace-home" });
   root.append(home);
-  home.append(E("header", {class:"workspace-home__greeting"}, [
-    E("p", {class:"eyebrow"}, "YOUR WORKSPACE"),
-    E("h1", {}, ui.state.user.firstName ? "Welcome back, " + ui.state.user.firstName : "Welcome back"),
-    E("p", {}, "A little space for your next idea."),
-  ]), E("div", {class:"btn-row", "aria-label":"Create something new"}, [
-    button("New note", () => create("note"), "primary"),
-    button("New lesson plan", () => create("lesson")),
-    link("Upload file", "/files"),
-  ]));
-  const type = item => ({note:"Note",lesson:"Lesson plan",template:"Template",file:"File"})[item.kind] ?? "Document";
-  const route = item => (item.kind === "file" ? "/file?id=" : "/editor?id=") + encodeURIComponent(item.item_id ?? item.id);
-  const stamp = item => item.opened_at ?? item.updated_at ?? item.created_at;
-  const metadata = item => type(item) + (stamp(item) ? " · " + ui.formatDateTime(stamp(item)) : "");
-  const last = data.resume?.[0];
-  home.append(E("section", {class:"workspace-home__continue", "aria-labelledby":"continue-heading"}, [
-    E("div", {}, [E("h2", {id:"continue-heading"}, "Continue where you left off"),
-      ...(last ? [E("h3", {}, last.title), E("p", {}, metadata(last))]
-        : [E("p", {}, "Start something new or open an existing item.")]),
-    ]), ...(last ? [link("Continue", route(last))] : []),
-  ]));
-  try {
-    const templates = (await api("/v1/documents?kind=template")).items.slice(0,4);
-    if (templates.length) home.append(E("section", {"aria-labelledby":"templates-heading"}, [
-      E("div", {class:"workspace-home__section-head"}, [E("h2", {id:"templates-heading"}, "Templates"),link("View all templates","/templates")]),
-      E("div", {class:"workspace-home__templates"}, templates.map(item => E("a", {class:"workspace-home__template",href:"#"+route(item)}, [E("span", {}, item.title),E("small", {}, "Open template")]))),
-    ]));
-  } catch { home.append(E("p",{class:"card__hint"},"Templates are unavailable right now.")); }
+  home.append(
+    E("header", { class: "workspace-home__greeting" }, [
+      E("p", { class: "eyebrow" }, "YOUR WORKSPACE"),
+      E("h1", {}, "Your workspace"),
+      E("p", {}, "A little space for your next idea."),
+    ]),
+    E("div", { class: "btn-row", "aria-label": "Create something new" }, [
+      button("New note", () => create("note"), "primary"),
+      button("New lesson plan", () => ui.navigate("/lessons")),
+      link("Upload file", "/files"),
+    ]),
+  );
+  const type = (item) =>
+    ({
+      note: "Note",
+      lesson: "Lesson plan",
+      template: "Template",
+      file: "File",
+    })[item.kind] ?? "Document";
+  const route = (item) =>
+    (item.kind === "file" ? "/file?id=" : "/editor?id=") +
+    encodeURIComponent(item.item_id ?? item.id);
+  const stamp = (item) => item.opened_at ?? item.updated_at ?? item.created_at;
+  const metadata = (item) =>
+    type(item) + (stamp(item) ? " · " + ui.formatDateTime(stamp(item)) : "");
   const seen = new Set();
-  const recent = [...(data.resume??[]),...(data.activity??[]),...(data.files??[]).map(item=>({...item,kind:"file"}))]
-    .sort((a,b)=>(Date.parse(stamp(b))||0)-(Date.parse(stamp(a))||0))
-    .filter(item=>{const key=route(item);if(seen.has(key))return false;seen.add(key);return true;}).slice(0,8);
-  home.append(E("section", {"aria-labelledby":"recent-heading"}, [
-    E("div", {class:"workspace-home__section-head"}, [E("h2", {id:"recent-heading"}, "Recent"),E("nav",{"aria-label":"Browse your work"},[link("All notes","/notes"),link("All lesson plans","/lessons"),link("All files","/files")])]),
-    recent.length ? E("ul", {class:"workspace-home__recent"}, recent.map(item=>E("li",{},E("a",{href:"#"+route(item)},[E("span",{},item.title),E("small",{},metadata(item))]))))
-      : E("p", {class:"card__hint"}, "Your recent work will appear here."),
-  ]));
+  const recent = [
+    ...(data.resume ?? []),
+    ...(data.activity ?? []),
+    ...(data.files ?? []).map((item) => ({ ...item, kind: "file" })),
+  ]
+    .sort((a, b) => (Date.parse(stamp(b)) || 0) - (Date.parse(stamp(a)) || 0))
+    .filter((item) => {
+      const key = route(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 8);
+  home.append(
+    E("section", { "aria-labelledby": "recent-heading" }, [
+      E("div", { class: "workspace-home__section-head" }, [
+        E("h2", { id: "recent-heading" }, "Recent"),
+        E("nav", { "aria-label": "Browse your work" }, [
+          link("All notes", "/notes"),
+          link("All lesson plans", "/lessons"),
+          link("All files", "/files"),
+        ]),
+      ]),
+      recent.length
+        ? E(
+            "ul",
+            { class: "workspace-home__recent" },
+            recent.map((item) =>
+              E(
+                "li",
+                {},
+                E("a", { href: "#" + route(item) }, [
+                  E("span", {}, item.title),
+                  E("small", {}, metadata(item)),
+                ]),
+              ),
+            ),
+          )
+        : E("p", { class: "card__hint" }, "Your recent work will appear here."),
+    ]),
+  );
 }
 export async function renderDocuments(kind) {
   const root = ui.viewRoot,
-    title = { note: "Notes", lesson: "Lesson plans", template: "Templates" }[
-      kind
-    ];
+    title = {
+      note: "Notes",
+      lesson: "Lesson plans",
+      template: "Legacy templates",
+    }[kind];
   root.append(
     head(
       title,
@@ -440,6 +498,9 @@ export async function renderEditor(params) {
     data = await api("/v1/documents/" + encodeURIComponent(id)),
     item = data.item,
     root = ui.viewRoot;
+  const lesson =
+    item.kind === "lesson" ? await lessonControls(item, data.workspace) : null;
+  if (lesson) root.append(lesson.breadcrumbs);
   const title = ui.field({
     label: "Document title",
     extraAttrs: { maxlength: 200 },
@@ -449,7 +510,13 @@ export async function renderEditor(params) {
   planned.input.value = dateOnly(item.planned_date);
   const form = E("div", { class: "editor-fields" }),
     inputs = {};
-  const keys = item.kind === "note" ? { body: "Your note" } : labels;
+  const keys =
+    item.kind === "note"
+      ? { body: "Your note" }
+      : {
+          ...labels,
+          ...(item.content.body ? { body: "Existing lesson content" } : {}),
+        };
   for (const [key, label] of Object.entries(keys)) {
     const input = E("textarea", {
       id: "editor-" + key,
@@ -459,7 +526,7 @@ export async function renderEditor(params) {
           : ["subject", "grade", "topic", "duration"].includes(key)
             ? 2
             : 5,
-      maxlength: item.kind === "note" ? 300000 : 20000,
+      maxlength: key === "body" ? 300000 : 20000,
       spellcheck: true,
     });
     input.value = item.content[key] || "";
@@ -473,9 +540,16 @@ export async function renderEditor(params) {
   }
   if (item.kind !== "note") {
     const groups = {
-      Overview: ["subject", "grade", "topic", "date", "duration"],
+      Overview:
+        item.kind === "lesson"
+          ? ["topic", "date", "duration"]
+          : ["subject", "grade", "topic", "date", "duration"],
+      ...(item.kind === "lesson"
+        ? { "Legacy subject / grade labels": ["subject", "grade"] }
+        : {}),
       Planning: ["objectives", "priorKnowledge", "resources"],
       "Lesson flow": [
+        "body",
         "introduction",
         "teachingActivities",
         "learnerActivities",
@@ -484,9 +558,11 @@ export async function renderEditor(params) {
       "After lesson": ["reflection", "notes"],
     };
     for (const [name, keys] of Object.entries(groups)) {
-      const details = E("details", { class: "lesson-group", open: true }, [
-        E("summary", {}, name),
-      ]);
+      const details = E(
+        "details",
+        { class: "lesson-group", open: name === "Overview" },
+        [E("summary", {}, name)],
+      );
       for (const key of keys)
         if (inputs[key]) details.append(inputs[key].parentElement);
       form.append(details);
@@ -500,9 +576,13 @@ export async function renderEditor(params) {
     error = E("p", { class: "form-error", role: "alert", hidden: true });
   const read = () => ({
     title: title.input.value.trim() || "Untitled",
-    content: Object.fromEntries(
-      Object.entries(inputs).map(([key, input]) => [key, input.value]),
-    ),
+    content: {
+      ...item.content,
+      ...Object.fromEntries(
+        Object.entries(inputs).map(([key, input]) => [key, input.value]),
+      ),
+    },
+    ...(lesson ? { lesson: lesson.read() } : {}),
     plannedDate: item.kind === "lesson" ? planned.input.value || null : null,
   });
   const save = createAutosave({
@@ -526,7 +606,12 @@ export async function renderEditor(params) {
     },
   });
   editor = { save };
-  for (const input of [title.input, planned.input, ...Object.values(inputs)])
+  for (const input of [
+    title.input,
+    planned.input,
+    ...Object.values(inputs),
+    ...(lesson?.inputs || []),
+  ])
     input.addEventListener("input", () => save.changed());
   let resume = { ...data.resume },
     stateTimer,
@@ -587,10 +672,13 @@ export async function renderEditor(params) {
     item.kind === "template" ? "Create lesson from template" : "Duplicate",
     async () => {
       await save.flush();
+      if (lesson && !lesson.destination.input.value)
+        throw new Error("Choose a destination class for the independent copy.");
       const r = await api("/v1/documents/" + id + "/copy", {
         method: "POST",
         body: {
           kind: item.kind === "template" ? "lesson" : item.kind,
+          ...(lesson ? { workspaceId: lesson.destination.input.value } : {}),
           title: (read().title + " (copy)").slice(0, 200),
         },
       });
@@ -626,6 +714,7 @@ export async function renderEditor(params) {
   );
   const actions = E("div", { class: "btn-row" }, [
     retry,
+    ...(lesson ? [lesson.destination.wrapper] : []),
     duplicate,
     copy,
     button("Download draft", () => downloadDraft(read())),
@@ -670,6 +759,7 @@ export async function renderEditor(params) {
     ),
     E("section", { class: "card editor-card" }, [
       title.wrapper,
+      ...(lesson ? [lesson.wrapper] : []),
       ...(item.kind === "lesson" ? [planned.wrapper] : []),
       E("div", { class: "editor-actions" }, [status, actions]),
       error,
@@ -678,62 +768,9 @@ export async function renderEditor(params) {
   );
   if (item.kind === "lesson") {
     try {
-      const files = await api("/v1/resources"),
-        select = E("select", { "aria-label": "Choose resource to attach" }, [
-          E("option", { value: "" }, "Choose a resource"),
-          ...files.items
-            .filter((r) => r.status === undefined || r.status === "ready")
-            .map((r) => E("option", { value: r.id }, r.title)),
-        ]);
-      const attached = E("div", {});
-      const refresh = async () => {
-        const r = await api("/v1/documents/" + id);
-        attached.replaceChildren(
-          ...r.resources.map((f) =>
-            E("div", { class: "entity-row" }, [
-              E("a", { href: "#/file?id=" + f.id }, f.title),
-              button("Detach", async () => {
-                await api("/v1/documents/" + id + "/resources/" + f.id, {
-                  method: "DELETE",
-                });
-                await refresh();
-              }),
-            ]),
-          ),
-        );
-      };
-      const search = ui.field({
-        label: "Search resources to attach",
-        type: "search",
-      });
       root.append(
-        section(
-          "Attached resources",
-          E("div", { class: "form" }, [
-            attached,
-            search.wrapper,
-            button("Find resources", async () => {
-              const r = await api(
-                "/v1/resources?search=" +
-                  encodeURIComponent(search.input.value),
-              );
-              select.replaceChildren(
-                E("option", { value: "" }, "Choose a resource"),
-                ...r.items.map((f) => E("option", { value: f.id }, f.title)),
-              );
-            }),
-            select,
-            button("Attach resource", async () => {
-              if (!select.value) return;
-              await api("/v1/documents/" + id + "/resources/" + select.value, {
-                method: "PUT",
-              });
-              await refresh();
-            }),
-          ]),
-        ),
+        await resourcePanel("/v1/documents/" + id + "/resources", id),
       );
-      await refresh();
     } catch (error) {
       root.append(
         E(
@@ -748,6 +785,7 @@ export async function renderEditor(params) {
   const active = inputs[resume.field] || Object.values(inputs)[0];
   requestAnimationFrame(() => {
     if (!active.isConnected) return;
+    if (active.closest("details")) active.closest("details").open = true;
     active.focus({ preventScroll: true });
     active.setSelectionRange(
       resume.cursor || 0,
@@ -763,6 +801,12 @@ export async function renderEditor(params) {
 }
 export async function renderFiles() {
   const root = ui.viewRoot;
+  let previews = [];
+  const clearPreviews = () => {
+    previews.forEach((p) => p.dispose());
+    previews = [];
+  };
+  cleanup = clearPreviews;
   root.append(
     head(
       "Your teaching resources",
@@ -789,8 +833,24 @@ export async function renderFiles() {
         E("option", { value: v }, v),
       ),
     );
+  const category = selectField("Resource category", [
+    ["", "All categories"],
+    ...CATEGORIES,
+  ]);
+  const uploadCategory = selectField(
+    "Upload category",
+    CATEGORIES.filter((c) => c !== "Videos"),
+    "Documents",
+  );
   let offset = 0,
     maxBytes = 20 * 1024 * 1024;
+  let selectedFile = null;
+  input.addEventListener("change", () => {
+    selectedFile = input.files[0] || null;
+    status.textContent = selectedFile
+      ? "Selected: " + selectedFile.name
+      : "Choose or drop a file.";
+  });
   const more = button("Load more", async () => {
     offset += 20;
     await load(true);
@@ -801,6 +861,7 @@ export async function renderFiles() {
         new URLSearchParams({
           search: search.input.value,
           sort: sort.value,
+          ...(category.input.value ? { category: category.input.value } : {}),
           type: type.value,
           offset: String(offset),
         }),
@@ -813,14 +874,59 @@ export async function renderFiles() {
         ? `Storage: ${Math.ceil(Number(r.usage.storage_used_bytes) / 1048576)} / ${Math.floor(Number(r.usage.storage_quota_bytes) / 1048576)} MiB used.`
         : "Verify your email to upload files. Notes and lessons are available now.";
     }
-    if (!append) results.replaceChildren();
-    results.append(list(r.items, "file"));
+    if (!append) {
+      clearPreviews();
+      results.replaceChildren();
+    }
+    results.append(
+      list(r.items, "file", (item) => {
+        const preview = createResourcePreview({ item, el: E, api });
+        previews.push(preview);
+        return preview.element;
+      }),
+    );
+    for (const resource of r.items) {
+      const chosen = selectField(
+        "Category for " + resource.title,
+        CATEGORIES,
+        resource.category || "Documents",
+      );
+      chosen.input.disabled = Boolean(resource.external_url);
+      results.append(
+        E("details", {}, [
+          E("summary", {}, "Manage " + resource.title),
+          chosen.wrapper,
+          button("Save category", async () => {
+            await api("/v1/resources/" + resource.id, {
+              method: "PATCH",
+              body: { title: resource.title, category: chosen.input.value },
+            });
+            await load();
+          }),
+          button("Delete library resource", async () => {
+            if (
+              !(
+                await ui.confirmDialog({
+                  title: "Delete " + resource.title + "?",
+                  body: "This removes the underlying library resource from all lessons and classes. Use Remove link inside a lesson to keep the shared file.",
+                  confirmLabel: "Delete resource",
+                  danger: true,
+                })
+              ).confirmed
+            )
+              return;
+            await api("/v1/resources/" + resource.id, { method: "DELETE" });
+            await load();
+          }),
+        ]),
+      );
+    }
     more.hidden = r.items.length < 20;
   }
   const upload = button(
     "Upload resource",
     async () => {
-      const file = input.files[0];
+      const file = selectedFile || input.files[0];
       if (!file) {
         status.textContent = "Choose a file first.";
         return;
@@ -844,8 +950,16 @@ export async function renderFiles() {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Upload failed.");
+        await api("/v1/resources/" + data.item.id, {
+          method: "PATCH",
+          body: {
+            title: data.item.title,
+            category: uploadCategory.input.value,
+          },
+        });
         status.textContent = "Uploaded. Private scanning is in progress.";
         input.value = "";
+        selectedFile = null;
         offset = 0;
         await load();
       } catch (err) {
@@ -854,25 +968,72 @@ export async function renderFiles() {
     },
     "primary",
   );
-  root.append(
-    section(
-      "Add to your library",
-      E("div", { class: "upload-area" }, [
-        E(
-          "label",
-          { for: "resource-upload" },
-          "PDF, Office documents, text, and common images",
-        ),
-        input,
-        upload,
-        status,
-      ]),
-    ),
+  const uploadArea = E(
+    "div",
+    { class: "upload-area", "aria-label": "File upload area" },
+    [
+      E(
+        "p",
+        { class: "upload-area__hint" },
+        "Drag a file here, or choose one below.",
+      ),
+      E(
+        "label",
+        { for: "resource-upload" },
+        "PDF, Office documents, text, and common images",
+      ),
+      input,
+      uploadCategory.wrapper,
+      upload,
+      status,
+    ],
   );
+  let dragDepth = 0;
+  uploadArea.addEventListener("dragenter", (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+    event.preventDefault();
+    dragDepth++;
+    if (!input.disabled && !upload.disabled)
+      uploadArea.classList.add("is-dragging");
+  });
+  uploadArea.addEventListener("dragover", (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect =
+      input.disabled || upload.disabled ? "none" : "copy";
+  });
+  uploadArea.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) uploadArea.classList.remove("is-dragging");
+  });
+  uploadArea.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dragDepth = 0;
+    uploadArea.classList.remove("is-dragging");
+    if (input.disabled || upload.disabled) return;
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (files.length !== 1) {
+      status.textContent = "Please drop one file at a time.";
+      return;
+    }
+    if (files[0].size > maxBytes) {
+      status.textContent =
+        "File exceeds the " + Math.floor(maxBytes / 1024 / 1024) + " MB limit.";
+      return;
+    }
+    selectedFile = files[0];
+    input.value = "";
+    status.textContent =
+      "Selected: " +
+      selectedFile.name +
+      ". Choose Upload resource to upload it.";
+  });
+  root.append(section("Add to your library", uploadArea));
   const form = E("form", { class: "toolbar" }, [
     search.wrapper,
     sort,
     type,
+    category.wrapper,
     E("button", { type: "submit", class: "btn btn--ghost" }, "Find files"),
   ]);
   form.addEventListener("submit", (e) => {
@@ -880,7 +1041,15 @@ export async function renderFiles() {
     offset = 0;
     load().catch((err) => ui.toast(ui.friendlyError(err), "error"));
   });
-  root.append(form, results, more);
+  root.append(
+    videoLinkForm(async () => {
+      offset = 0;
+      await load();
+    }),
+    form,
+    results,
+    more,
+  );
   await load();
 }
 export async function renderFile(params) {
@@ -891,9 +1060,39 @@ export async function renderFile(params) {
   root.append(
     head(
       item.title,
-      Math.ceil(Number(item.size_bytes) / 1024) + " KB · " + item.mime,
+      item.external_url
+        ? "Video link"
+        : Math.ceil(Number(item.size_bytes) / 1024) +
+            " KB · " +
+            resourceType(item),
     ),
   );
+  if (item.external_url) {
+    const preview = createResourcePreview({ item, el: E, api, eager: true });
+    cleanup = preview.dispose;
+    root.append(
+      E("section", { class: "card resource-video" }, [
+        E(
+          "a",
+          {
+            href: item.external_url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            "aria-label": "Watch " + item.title,
+          },
+          preview.element,
+        ),
+        E(
+          "p",
+          { class: "card__hint" },
+          "Opens on the video provider’s website.",
+        ),
+        resourceAnchor(item),
+      ]),
+      link("Back to library", "/files"),
+    );
+    return;
+  }
   if (item.status && item.status !== "ready") {
     const status = E(
       "p",
@@ -971,7 +1170,7 @@ export async function renderFile(params) {
     });
   };
   const preview = E("section", { class: "card file-preview" }, [
-    E("p", {}, "Loading preview…"),
+    createLoader("Loading preview…"),
   ]);
   root.append(
     E("div", { class: "btn-row" }, [
@@ -1122,6 +1321,101 @@ export async function renderDeviceApproval(params) {
   }, 10000);
   cleanup = () => clearInterval(interval);
 }
+function securityActivity(events) {
+  const from = ui.field({ label: "From date", type: "date" });
+  const to = ui.field({ label: "To date", type: "date" });
+  const device = ui.field({
+    label: "Device or browser",
+    placeholder: "Search Safari, iPhone, Windows…",
+  });
+  const list = E("ol", { class: "security-timeline" });
+  const count = E("p", { class: "card__hint", role: "status" });
+  const label = (event) =>
+    event.user_agent
+      ? ui.describeUserAgent(event.user_agent)
+      : "Device not recorded";
+  const dateKey = (value) => {
+    const d = new Date(value);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const update = () => {
+    list.replaceChildren();
+    if (
+      from.input.value &&
+      to.input.value &&
+      from.input.value > to.input.value
+    ) {
+      count.textContent = "Choose an end date on or after the start date.";
+      return;
+    }
+    const matches = events.filter((event) => {
+      const day = dateKey(event.created_at);
+      return (
+        (!from.input.value || day >= from.input.value) &&
+        (!to.input.value || day <= to.input.value) &&
+        label(event)
+          .toLowerCase()
+          .includes(device.input.value.trim().toLowerCase())
+      );
+    });
+    count.textContent = `${matches.length} of ${events.length} recent events · Dates use your local time`;
+    if (!matches.length) {
+      list.append(
+        E(
+          "li",
+          { class: "empty-note" },
+          events.length
+            ? "No activity matches these filters."
+            : "No security activity yet.",
+        ),
+      );
+      return;
+    }
+    for (const event of matches) {
+      const title = event.event.replaceAll("_", " ");
+      list.append(
+        E("li", { class: "security-timeline__event" }, [
+          E(
+            "span",
+            { class: "security-timeline__marker", "aria-hidden": "true" },
+            "•",
+          ),
+          E("div", { class: "security-timeline__details" }, [
+            E("strong", {}, title.charAt(0).toUpperCase() + title.slice(1)),
+            E("span", { class: "security-device" }, label(event)),
+          ]),
+          E(
+            "time",
+            { datetime: event.created_at },
+            ui.formatDateTime(event.created_at),
+          ),
+        ]),
+      );
+    }
+  };
+  for (const f of [from, to, device]) f.input.addEventListener("input", update);
+  const reset = button("Clear filters", () => {
+    for (const f of [from, to, device]) f.input.value = "";
+    update();
+  });
+  update();
+  return E("div", { class: "security-activity" }, [
+    E(
+      "p",
+      { class: "card__hint" },
+      "Review your latest 50 security events. Older events may not have device details.",
+    ),
+    E("div", { class: "security-filters" }, [
+      from.wrapper,
+      to.wrapper,
+      device.wrapper,
+      reset,
+    ]),
+    count,
+    list,
+  ]);
+}
+
 export async function renderDevices() {
   const root = ui.viewRoot,
     data = await api("/v1/me/devices");
@@ -1142,7 +1436,7 @@ export async function renderDevices() {
       section(
         "New browser sign-in",
         E("div", { class: "form" }, [
-          E("p", {}, ui.describeUserAgent(p.label) + " · " + p.ip),
+          E("p", {}, ui.describeUserAgent(p.label)),
           E("p", {}, ui.formatDateTime(p.created_at)),
           number.wrapper,
           button(
@@ -1249,30 +1543,43 @@ export async function renderDevices() {
           });
           if (!c.confirmed) return;
           const r = await ui.withReauth(() =>
-            api("/v1/me/recovery-codes", { method: "POST" }),
+            api("/v1/me/recovery-codes", { method: "POST", body: {} }),
           );
           codes.replaceChildren(
-            E("pre", { class: "recovery-codes" }, r.codes.join("\n")),
-            button("Download codes", () =>
-              downloadDraft({ recoveryCodes: r.codes }),
+            E(
+              "p",
+              { role: "status" },
+              "Your recovery codes are ready. Save them now — you cannot view them again after leaving this page.",
             ),
+            E(
+              "ol",
+              { class: "recovery-codes" },
+              r.codes.map((code) => E("li", {}, E("code", {}, code))),
+            ),
+            button("Download codes", () => {
+              const url = URL.createObjectURL(
+                new Blob(
+                  [
+                    "Chix recovery codes\nKeep these private. Each code can be used once.\n\n" +
+                      r.codes.join("\n"),
+                  ],
+                  { type: "text/plain" },
+                ),
+              );
+              const link = E("a", {
+                href: url,
+                download: "chix-recovery-codes.txt",
+              });
+              document.body.append(link);
+              link.click();
+              link.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }),
           );
         }),
         codes,
       ]),
     ),
-    section(
-      "Recent security activity",
-      E(
-        "div",
-        {},
-        data.events.map((e) =>
-          E("div", { class: "entity-row" }, [
-            E("span", {}, e.event.replaceAll("_", " ")),
-            E("small", {}, ui.formatDateTime(e.created_at)),
-          ]),
-        ),
-      ),
-    ),
+    section("Recent security activity", securityActivity(data.events)),
   );
 }

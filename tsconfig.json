@@ -11,5 +11,8 @@
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests run through tsx and must never reach dist/: shipping them would
+  // publish fixtures like testAccounts.ts, which mints verified accounts.
+  "exclude": ["src/**/*.test.ts", "src/testAccounts.ts"]
 }

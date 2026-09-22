@@ -35,12 +35,12 @@ test("homepage CTAs, SPA navigation, auth failures, copy fallback and native sha
     copied,
     nativeShare;
   const user = {
-id: "teacher",
-username: "teacher",
-firstName: "Teacher",
-email: "teacher@example.com",
-emailVerified: true,
-};
+    id: "teacher",
+    username: "teacher",
+    firstName: "Teacher",
+    email: "teacher@example.com",
+    emailVerified: true,
+  };
   Object.defineProperty(navigator, "clipboard", {
     value: {
       writeText: async (url) => {
@@ -139,30 +139,27 @@ emailVerified: true,
     await home(true);
     assert.match(
       document.querySelector("#view-root h1").textContent,
-      /Welcome back/,
+      /Your workspace/,
     );
     assert.ok(button("New note"));
     assert.ok(button("New lesson plan"));
 
-assert.match(
-  document.querySelector("#view-root").textContent,
-  /Continue where you left off/,
-);
+    assert.doesNotMatch(
+      document.querySelector("#view-root").textContent,
+      /Continue where you left off/,
+    );
 
-assert.match(
-  document.querySelector("#view-root").textContent,
-  /Recent/,
-);
+    assert.match(document.querySelector("#view-root").textContent, /Recent/);
 
-assert.doesNotMatch(
-document.querySelector("#view-root").textContent,
-/teacher@example\.com/,
-);
+    assert.doesNotMatch(
+      document.querySelector("#view-root").textContent,
+      /teacher@example\.com/,
+    );
 
-assert.doesNotMatch(
-  document.querySelector("#view-root").textContent,
-  /Passkeys|Active sessions|Recovery email/,
-);
+    assert.doesNotMatch(
+      document.querySelector("#view-root").textContent,
+      /Passkeys|Active sessions|Recovery email/,
+    );
     assert.equal(link("Sign in"), undefined);
     assert.equal(link("Create account"), undefined);
     assert.doesNotMatch(
