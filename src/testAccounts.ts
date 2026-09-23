@@ -8,7 +8,7 @@ import { authenticator } from "./totp.js";
 export async function verificationToken(email: string) {
   const row = (
     await pool.query(
-      "SELECT n.encrypted_body FROM notification_outbox n JOIN users u ON u.id=n.user_id WHERE u.email=$1 AND n.subject='Chix: verify email' ORDER BY n.created_at DESC LIMIT 1",
+      "SELECT n.encrypted_body FROM notification_outbox n JOIN users u ON u.id=n.user_id WHERE u.email=$1 AND n.subject='Chix: verify email' ORDER BY n.created_at DESC, n.id DESC LIMIT 1",
       [email],
     )
   ).rows[0];
@@ -23,7 +23,7 @@ export async function verificationToken(email: string) {
 export async function loginCode(email: string) {
   const row = (
     await pool.query(
-      "SELECT n.encrypted_body FROM notification_outbox n JOIN users u ON u.id=n.user_id WHERE u.email=$1 AND n.subject='Chix: your sign-in code' ORDER BY n.created_at DESC LIMIT 1",
+      "SELECT n.encrypted_body FROM notification_outbox n JOIN users u ON u.id=n.user_id WHERE u.email=$1 AND n.subject='Chix: your sign-in code' ORDER BY n.created_at DESC, n.id DESC LIMIT 1",
       [email],
     )
   ).rows[0];

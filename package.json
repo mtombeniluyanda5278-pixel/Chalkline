@@ -16,7 +16,10 @@
     "test:unit": "node --test tests/*.test.mjs",
     "test:integration": "node scripts/test-integration.mjs",
     "format:check": "prettier --check app.js workspace.js autosave.js src scripts tests styles.css index.html",
-    "db:setup:production": "node scripts/setup-production.mjs"
+    "db:setup:production": "node scripts/setup-production.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:report": "playwright show-report"
   },
   "engines": {
     "node": "24.x"
@@ -42,6 +45,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.4.1",
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",

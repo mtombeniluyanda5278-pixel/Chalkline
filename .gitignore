@@ -34,3 +34,9 @@ wapiti-report/
 
 # Local Claude Code settings; the shared config in .claude/ is tracked.
 .claude/settings.local.json
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright/

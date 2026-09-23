@@ -11,16 +11,19 @@ after(closeRedis);
 test("shared leases renew, enforce capacity, and release without resurrection", async () => {
   const key = `test:lease:${randomUUID()}`;
   const limits = [{ key, max: 1 }];
-  const lease = await concurrencyLease(limits, { ttlMs: 1000, renewMs: 100 });
+  // Generous absolute margins: the property under test is that renewal keeps a
+  // lease alive past its TTL, and a tight 1000ms window made that hostage to
+  // event-loop jitter once the suite began exercising storage.
+  const lease = await concurrencyLease(limits, { ttlMs: 3000, renewMs: 250 });
   assert.ok(lease);
   try {
     assert.equal(await concurrencyLease(limits), null);
-    await delay(1300);
+    await delay(3600);
     assert.equal(lease.signal.aborted, false);
     assert.equal(await concurrencyLease(limits), null);
     await lease();
     await lease();
-    await delay(150);
+    await delay(500);
     assert.equal(await redis.zcard(key), 0);
     const next = await concurrencyLease(limits);
     assert.ok(next);

@@ -550,13 +550,21 @@ test(
       });
       assert.equal(pending.statusCode, 404, pending.body);
     }
-    await runScanJobs();
+    // runScanJobs() is bounded by global scan capacity, so one pass need not
+    // reach this resource when the queue is busy. Drain until it is ready.
+    for (let pass = 0; pass < 10; pass++) {
+      await runScanJobs();
+      const status = (
+        await pool.query("SELECT status FROM resources WHERE id=$1", [id])
+      ).rows[0]?.status;
+      if (status === "ready") break;
+    }
     const get = await app.inject({
       method: "GET",
       url: "/v1/resources/" + id + "/download",
       headers: { cookie: a.cookie },
     });
-    assert.equal(get.statusCode, 200);
+    assert.equal(get.statusCode, 200, get.body);
     assert.match(String(get.headers["content-disposition"]), /^attachment/);
     assert.equal(get.body, "Teaching resource");
     for (const url of [
@@ -616,10 +624,21 @@ test(
       ).rowCount,
       1,
     );
-    await runMaintenance();
-    const objects = await s3!.send(
+    // runMaintenance() drains at most 20 queued deletions per pass, oldest
+    // first, so a full-suite run can leave this key for a later pass. Drain
+    // until it is gone rather than assuming one pass suffices.
+    let objects = await s3!.send(
       new ListObjectsV2Command({ Bucket: config.STORAGE_BUCKET, Prefix: key }),
     );
+    for (let pass = 0; pass < 10 && objects.KeyCount; pass++) {
+      await runMaintenance();
+      objects = await s3!.send(
+        new ListObjectsV2Command({
+          Bucket: config.STORAGE_BUCKET,
+          Prefix: key,
+        }),
+      );
+    }
     assert.equal(objects.KeyCount, 0);
     const versions = await s3!.send(
       new ListObjectVersionsCommand({
