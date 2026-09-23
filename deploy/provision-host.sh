@@ -49,6 +49,23 @@ else
   echo "    already present"
 fi
 
+# Oracle Cloud's Ubuntu images ship saved iptables rules that reject
+# everything but SSH, and they survive reboots. Left in place they silently
+# beat ufw and Caddy never answers on 80 or 443, which looks like a broken
+# certificate rather than a firewall. Hand control to ufw before enabling it,
+# never after, so the box is not left with no rules at all.
+echo "==> Clearing preinstalled firewall rules"
+if dpkg -l 2>/dev/null | grep -q iptables-persistent; then
+  systemctl stop netfilter-persistent 2>/dev/null || true
+  systemctl disable netfilter-persistent 2>/dev/null || true
+  rm -f /etc/iptables/rules.v4 /etc/iptables/rules.v6
+  iptables -F INPUT 2>/dev/null || true
+  iptables -P INPUT ACCEPT 2>/dev/null || true
+  echo "    cleared; ufw is now authoritative"
+else
+  echo "    none found"
+fi
+
 # Only Caddy is meant to be reachable. Postgres, Redis, ClamAV and MinIO
 # publish no ports, but a firewall means a future mistake cannot expose them.
 echo "==> Configuring firewall"
@@ -69,4 +86,8 @@ dpkg-reconfigure -f noninteractive unattended-upgrades
 
 echo
 echo "Host ready. Docker $(docker --version | awk '{print $3}' | tr -d ,), swap on, ports 22/80/443 open."
+echo
+echo "On Oracle Cloud, AWS or similar, the provider has a second firewall of"
+echo "its own. Open 80 and 443 there too, or nothing reaches this host."
+echo
 echo "Next: clone the repository, then deploy/generate-env.sh <domain> <email>."
