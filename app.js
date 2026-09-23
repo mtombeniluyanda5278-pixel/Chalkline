@@ -1209,17 +1209,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 /* View: Sign in                                                          */
 /* ---------------------------------------------------------------------- */
 
-function buildGoogleSignInButton() {
+// On the sign-up screen no account is named yet, so the button reveals itself
+// from the global setting. The sign-in screen passes false and decides per
+// account instead; letting both run would race, and the slower answer would win.
+function buildGoogleSignInButton(autoReveal = true) {
   const button = el(
     "button",
     { type: "button", class: "btn btn--ghost btn--full", hidden: true },
     "Continue with Google",
   );
-  apiFetch("/v1/auth/methods")
-    .then((methods) => {
-      button.hidden = !methods.google;
-    })
-    .catch(() => {});
+  if (autoReveal)
+    apiFetch("/v1/auth/methods")
+      .then((methods) => {
+        button.hidden = !methods.google;
+      })
+      .catch(() => {});
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -1415,7 +1419,7 @@ async function renderLogin() {
     }
   });
 
-  const googleBtn = buildGoogleSignInButton();
+  const googleBtn = buildGoogleSignInButton(false);
   const methodSummary = el("p", { class: "login-email-summary" });
   const changeEmailBtn = el(
     "button",
