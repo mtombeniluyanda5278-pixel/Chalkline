@@ -173,6 +173,38 @@ export async function registerPasswordlessRoutes(app: FastifyInstance) {
     google: googleEnabled(),
     emailOtp: true,
   }));
+  // The sign-in screen asks for an address first and then offers only what that
+  // account can actually use, so teachers are never shown a passkey prompt
+  // their school desktop cannot answer.
+  app.post("/v1/auth/methods", async (req) => {
+    const body = parse(
+      z.strictObject({
+        email: z.string().trim().email().max(254).toLowerCase(),
+      }),
+      req.body,
+    );
+    await limit("signInMethods", req.ip);
+    const account = (
+      await pool.query(
+        `SELECT u.role,
+                EXISTS(SELECT 1 FROM authenticators a WHERE a.user_id=u.id) AS authenticator,
+                EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id=u.id) AS passkey
+           FROM users u WHERE u.email=$1`,
+        [body.email],
+      )
+    ).rows[0];
+    // An unknown address answers exactly as an ordinary account does. Anything
+    // that distinguished them would turn this into an account-discovery oracle.
+    return {
+      emailOtp: true,
+      google: googleEnabled(),
+      authenticator: Boolean(account?.authenticator),
+      // Passkeys stay with the administrator: every other sign-in method
+      // already establishes trust on a new browser, so this costs teachers
+      // nothing and spares them a prompt most of their devices cannot satisfy.
+      passkey: Boolean(account?.passkey && account.role === "admin"),
+    };
+  });
   app.get("/v1/auth/google/pending", async (req) => {
     const identity = await pendingGoogle(req);
     return identity

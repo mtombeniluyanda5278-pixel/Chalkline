@@ -1268,8 +1268,13 @@ async function renderLogin() {
   );
   const codeBtn = el(
     "button",
-    { type: "submit", class: "btn btn--primary btn--full" },
+    { type: "button", class: "btn btn--primary btn--full" },
     "Email me a sign-in code",
+  );
+  const identifyBtn = el(
+    "button",
+    { type: "submit", class: "btn btn--primary btn--full" },
+    "Continue",
   );
   const backBtn = el(
     "button",
@@ -1284,12 +1289,25 @@ async function renderLogin() {
 
   const emailStep = el("form", { class: "form", novalidate: true }, [
     fields.email.wrapper,
-    codeBtn,
-    continueBtn,
+    identifyBtn,
   ]);
   emailStep.addEventListener("submit", async (e) => {
     e.preventDefault();
-    if (codeBtn.disabled || !fields.email.input.reportValidity()) return;
+    if (identifyBtn.disabled || !fields.email.input.reportValidity()) return;
+    identifyBtn.disabled = true;
+    errorBanner.hidden = true;
+    try {
+      await offerMethods(fields.email.input.value.trim());
+    } catch (error) {
+      errorBanner.textContent = friendlyError(error);
+      errorBanner.hidden = false;
+    } finally {
+      identifyBtn.disabled = false;
+    }
+  });
+
+  codeBtn.addEventListener("click", async () => {
+    if (codeBtn.disabled) return;
     codeBtn.disabled = true;
     errorBanner.hidden = true;
     try {
@@ -1339,15 +1357,14 @@ async function renderLogin() {
   continueBtn.addEventListener("click", () => {
     if (!fields.email.input.reportValidity()) return;
     emailSummary.textContent = fields.email.input.value.trim();
-    emailStep.hidden = true;
+    methodStep.hidden = true;
     authenticatorStep.hidden = false;
     fields.code.input.focus();
   });
 
   backBtn.addEventListener("click", () => {
     authenticatorStep.hidden = true;
-    emailStep.hidden = false;
-    fields.email.input.focus();
+    methodStep.hidden = false;
   });
 
   authenticatorStep.addEventListener("submit", async (e) => {
@@ -1398,9 +1415,22 @@ async function renderLogin() {
     }
   });
 
-  const passkeyRow = [buildGoogleSignInButton()];
+  const googleBtn = buildGoogleSignInButton();
+  const methodSummary = el("p", { class: "login-email-summary" });
+  const changeEmailBtn = el(
+    "button",
+    { type: "button", class: "btn btn--ghost btn--small" },
+    "Change email",
+  );
+  changeEmailBtn.addEventListener("click", () => {
+    methodStep.hidden = true;
+    emailStep.hidden = false;
+    fields.email.input.focus();
+  });
+
+  let passkeyBtn = null;
   if (webauthnSupported()) {
-    const passkeyBtn = el(
+    passkeyBtn = el(
       "button",
       { type: "button", class: "btn btn--ghost btn--full" },
       "Sign in with a passkey",
@@ -1423,7 +1453,38 @@ async function renderLogin() {
         passkeyBtn.disabled = false;
       }
     });
-    passkeyRow.push(el("hr", { class: "divider-line" }), passkeyBtn);
+  }
+
+  // The account is named before any method is offered, so nobody is shown a
+  // passkey prompt their device cannot answer, and the administrator keeps
+  // Touch ID. The server decides; this only renders the answer.
+  const methodStep = el(
+    "div",
+    { class: "form" },
+    [
+      methodSummary,
+      changeEmailBtn,
+      codeBtn,
+      continueBtn,
+      googleBtn,
+      passkeyBtn && el("hr", { class: "divider-line" }),
+      passkeyBtn,
+    ].filter(Boolean),
+  );
+  methodStep.hidden = true;
+
+  async function offerMethods(email) {
+    const methods = await apiFetch("/v1/auth/methods", {
+      method: "POST",
+      body: { email },
+    });
+    continueBtn.hidden = !methods.authenticator;
+    googleBtn.hidden = !methods.google;
+    if (passkeyBtn) passkeyBtn.hidden = !methods.passkey;
+    methodSummary.textContent = email;
+    emailStep.hidden = true;
+    methodStep.hidden = false;
+    codeBtn.focus();
   }
 
   viewRoot.append(
@@ -1432,11 +1493,12 @@ async function renderLogin() {
         el("h1", {}, "Sign in"),
         el("p", {}, "Welcome back to Chix."),
       ]),
-      el(
-        "div",
-        { class: "card" },
-        [errorBanner, emailStep, authenticatorStep].concat(passkeyRow),
-      ),
+      el("div", { class: "card" }, [
+        errorBanner,
+        emailStep,
+        methodStep,
+        authenticatorStep,
+      ]),
       el("div", { class: "link-row" }, [
         el("a", { href: "#/forgot-email" }, "Forgot your email?"),
         el("a", { href: "#/register" }, "Create an account"),

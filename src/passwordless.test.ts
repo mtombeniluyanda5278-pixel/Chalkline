@@ -451,3 +451,65 @@ test("Google email collision requires existing mailbox proof before linking", as
   ).rows[0];
   assert.equal(after.google_subject, sub);
 });
+
+// The sign-in screen asks which methods an address can use before showing any
+// buttons. That answer must never reveal whether an account exists, so an
+// unknown address has to look exactly like an ordinary registered one.
+test("per-account sign-in methods do not reveal whether an account exists", async () => {
+  const body = profile();
+  const registered = await post("/v1/auth/passwordless/register", body);
+  assert.equal(registered.statusCode, 201, registered.body);
+  const cookie = cookies(registered);
+  const verified = await post("/v1/auth/otp/verify", {
+    email: body.email,
+    code: await latestCode(body.email),
+  });
+  assert.equal(verified.statusCode, 200, verified.body);
+
+  const ordinary = await post("/v1/auth/methods", { email: body.email });
+  assert.equal(ordinary.statusCode, 200, ordinary.body);
+  const unknown = await post("/v1/auth/methods", {
+    email: `absent-${randomUUID().slice(0, 8)}@example.com`,
+  });
+  assert.equal(unknown.statusCode, 200, unknown.body);
+  assert.deepEqual(
+    ordinary.json(),
+    unknown.json(),
+    "a registered teacher and a stranger must be indistinguishable",
+  );
+  assert.equal(ordinary.json().emailOtp, true);
+  assert.equal(ordinary.json().passkey, false);
+  assert.equal(ordinary.json().authenticator, false);
+
+  // An enrolled authenticator is offered, because the account chose it.
+  await pool.query(
+    "INSERT INTO authenticators(user_id,encrypted_secret,last_step) SELECT id,'x',0 FROM users WHERE email=$1",
+    [body.email],
+  );
+  assert.equal(
+    (await post("/v1/auth/methods", { email: body.email })).json()
+      .authenticator,
+    true,
+  );
+
+  // A passkey is offered only to an administrator, never to a teacher who
+  // happens to have registered one.
+  await pool.query(
+    "INSERT INTO webauthn_credentials(user_id,credential_id,public_key) SELECT id,$2,$3 FROM users WHERE email=$1",
+    [body.email, Buffer.from(randomUUID()), Buffer.from("key")],
+  );
+  assert.equal(
+    (await post("/v1/auth/methods", { email: body.email })).json().passkey,
+    false,
+    "a non-admin with a passkey is still not offered one",
+  );
+
+  await pool.query("UPDATE users SET role='admin' WHERE email=$1", [
+    body.email,
+  ]);
+  assert.equal(
+    (await post("/v1/auth/methods", { email: body.email })).json().passkey,
+    true,
+    "the administrator keeps passkey sign-in",
+  );
+});

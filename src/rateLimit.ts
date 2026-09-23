@@ -20,6 +20,9 @@ const defaults = {
   authenticatorVerify: { max: 5, windowMs: 5 * 60 * 1000 },
   authenticatorLoginIp: { max: 30, windowMs: 15 * 60 * 1000 },
   login: { max: 30, windowMs: 15 * 60 * 1000 },
+  // Answering which methods an address can use is cheap and a school shares one
+  // address, so this is generous; it exists to blunt bulk enumeration attempts.
+  signInMethods: { max: 60, windowMs: 15 * 60 * 1000 },
   signup: { max: 5, windowMs: 60 * 60 * 1000 },
   passwordReset: { max: 3, windowMs: 60 * 60 * 1000 },
   verifyEmailAttempt: { max: 10, windowMs: 15 * 60 * 1000 },

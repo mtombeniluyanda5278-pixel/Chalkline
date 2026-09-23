@@ -28,16 +28,34 @@ test.describe("public pages", () => {
 
   // Hash routes are how the app links internally, and the only form that works
   // on static hosting as well as the dev server.
-  test("sign-in offers every passwordless method", async ({ page }) => {
+  test("sign-in asks who you are before offering any method", async ({
+    page,
+  }) => {
     await page.goto("/#/login");
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+
+    // Nothing is offered until the account is named, so a teacher is never
+    // shown a method their device cannot use.
+    await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Email me a sign-in code/i }),
+    ).toBeHidden();
+
+    await page.getByLabel("Email").fill("nobody@example.com");
+    await page.getByRole("button", { name: "Continue" }).click();
+
+    // An unknown address gets the ordinary set: an emailed code, and no
+    // passkey. Anything else would reveal whether the account exists.
     await expect(
       page.getByRole("button", { name: /Email me a sign-in code/i }),
     ).toBeVisible();
+    await expect(page.getByRole("button", { name: /passkey/i })).toBeHidden();
     await expect(
       page.getByRole("button", { name: /authenticator app/i }),
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: /passkey/i })).toBeVisible();
+    ).toBeHidden();
+
+    await page.getByRole("button", { name: "Change email" }).click();
+    await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();
   });
 
   test("health endpoint responds", async ({ request }) => {
