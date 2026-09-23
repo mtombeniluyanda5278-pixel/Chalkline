@@ -34,6 +34,7 @@ async function account(admin = false) {
     lastName: "PrivateSurname",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
     trustDevice: true,
   });
   const id = r.json().user.id;

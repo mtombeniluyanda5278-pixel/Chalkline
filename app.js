@@ -1585,6 +1585,32 @@ async function renderRegister() {
     }),
   };
 
+  // Shown before any information is sent, as POPIA section 18 requires, and
+  // enforced by the server as well so it cannot be skipped.
+  const acceptTerms = el("input", {
+    type: "checkbox",
+    id: "reg-accept-terms",
+    required: true,
+  });
+  const acceptLabel = el("div", { class: "field checkbox-field" }, [
+    acceptTerms,
+    el("label", { for: "reg-accept-terms" }, [
+      "I have read the ",
+      el(
+        "a",
+        { href: "#/privacy", target: "_blank", rel: "noopener" },
+        "Privacy notice",
+      ),
+      " and accept the ",
+      el(
+        "a",
+        { href: "#/terms", target: "_blank", rel: "noopener" },
+        "Terms of use",
+      ),
+      ".",
+    ]),
+  ]);
+
   if (parseHash().params.get("google") === "profile") {
     try {
       const identity = await apiFetch("/v1/auth/google/pending");
@@ -1623,6 +1649,7 @@ async function renderRegister() {
     bot,
     fields.marketingAnnouncements.wrapper,
     fields.marketingApps.wrapper,
+    acceptLabel,
     submitBtn,
   ]);
 
@@ -1664,6 +1691,7 @@ async function renderRegister() {
       username: fields.username.input.value.trim().toLowerCase(),
       marketingAnnouncements: fields.marketingAnnouncements.input.checked,
       marketingApps: fields.marketingApps.input.checked,
+      acceptTerms: acceptTerms.checked,
       timezone:
         Intl.DateTimeFormat().resolvedOptions().timeZone ||
         "Africa/Johannesburg",

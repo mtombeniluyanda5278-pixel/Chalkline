@@ -143,7 +143,10 @@ const Env = z.object({
       "Use an exact origin without path or trailing slash",
     ),
   ADMIN_NOTIFICATION_EMAIL: z.email().optional(),
-  MIN_ACCOUNT_AGE_YEARS: z.coerce.number().int().min(13).max(21).default(13),
+  // POPIA treats anyone under 18 as a child, whose information may only be
+  // processed with a guardian's consent. There is no mechanism for that, so 18
+  // is a floor rather than a default someone could lower by accident.
+  MIN_ACCOUNT_AGE_YEARS: z.coerce.number().int().min(18).max(21).default(18),
   STORAGE_ENDPOINT: z.url().optional(),
   STORAGE_REGION: z.string().default("us-east-1"),
   STORAGE_BUCKET: z.string().optional(),

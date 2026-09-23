@@ -39,6 +39,7 @@ function input(trustDevice = false) {
     lastName: "Test",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
     trustDevice,
   };
 }

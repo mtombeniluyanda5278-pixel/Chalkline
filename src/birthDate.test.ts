@@ -10,6 +10,7 @@ const profile = (dateOfBirth: string) => ({
   username: "dob.teacher",
   dateOfBirth,
   timezone: "Africa/Johannesburg",
+  acceptTerms: true,
 });
 test("DOB accepts matching day numbers and the exact minimum-age birthday", (t) => {
   t.mock.timers.enable({

@@ -43,6 +43,7 @@ function validRegistration(overrides: Record<string, unknown> = {}) {
     lastName: "User",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
     email: `test-${id}@example.com`,
     username: `test.${id.slice(0, 6)}`,
     phone: "+27821234567",

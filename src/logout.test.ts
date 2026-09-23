@@ -51,6 +51,7 @@ async function browserSession() {
     lastName: "Test",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
     email: `logout-${suffix}@example.com`,
     username: `r.${suffix}`,
     trustDevice: true,

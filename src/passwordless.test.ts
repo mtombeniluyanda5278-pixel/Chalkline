@@ -47,6 +47,7 @@ function profile() {
     email: `otp-${id}@example.com`,
     username: `otp.${id}`,
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
   };
   emails.push(body.email);
   return body;
@@ -512,4 +513,65 @@ test("per-account sign-in methods do not reveal whether an account exists", asyn
     true,
     "the administrator keeps passkey sign-in",
   );
+});
+
+// POPIA section 18 wants the notice given before information is collected, and
+// the CPA wants significant terms drawn to attention. A checkbox only in the
+// browser can be skipped, so the server refuses registration without it.
+test("registration requires accepting the terms and privacy notice", async () => {
+  const { acceptTerms: _accepted, ...withoutAcceptance } = profile();
+  const refused = await post(
+    "/v1/auth/passwordless/register",
+    withoutAcceptance,
+  );
+  assert.equal(refused.statusCode, 400, refused.body);
+  const declined = await post("/v1/auth/passwordless/register", {
+    ...withoutAcceptance,
+    acceptTerms: false,
+  });
+  assert.equal(declined.statusCode, 400, declined.body);
+});
+
+// POPIA treats anyone under 18 as a child, whose information needs a
+// guardian's consent this service has no way to collect.
+test("nobody under 18 can register", async () => {
+  const body = profile();
+  const seventeen = new Date();
+  seventeen.setFullYear(seventeen.getFullYear() - 17);
+  const refused = await post("/v1/auth/passwordless/register", {
+    ...body,
+    dateOfBirth: seventeen.toISOString().slice(0, 10),
+  });
+  // The only difference from a valid profile is the date of birth, and this
+  // endpoint deliberately returns a generic message, so the status is the check.
+  assert.equal(refused.statusCode, 400, refused.body);
+});
+
+// Section 69: consent to marketing must be withdrawable, not only given once.
+test("marketing consent can be withdrawn and given again after sign-up", async () => {
+  const body = { ...profile(), marketingAnnouncements: true };
+  const registered = await post("/v1/auth/passwordless/register", body);
+  assert.equal(registered.statusCode, 201, registered.body);
+  const verified = await post("/v1/auth/otp/verify", {
+    email: body.email,
+    code: await latestCode(body.email),
+  });
+  assert.equal(verified.statusCode, 200, verified.body);
+  const cookie = cookies(verified);
+  const read = async () =>
+    (
+      await app.inject({ url: "/v1/me/preferences", headers: { cookie } })
+    ).json();
+  assert.equal((await read()).marketingAnnouncements, true);
+
+  const off = await app.inject({
+    method: "PATCH",
+    url: "/v1/me/preferences",
+    headers: { cookie },
+    payload: { marketingAnnouncements: false, marketingApps: false },
+  });
+  assert.equal(off.statusCode, 200, off.body);
+  const after = await read();
+  assert.equal(after.marketingAnnouncements, false);
+  assert.equal(after.marketingApps, false);
 });

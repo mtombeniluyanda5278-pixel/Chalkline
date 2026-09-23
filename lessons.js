@@ -637,6 +637,13 @@ function classTimetable(cls, readOnly, photoImportAvailable = true) {
           { class: "timetable-photo-warning" },
           "Blurry, low-resolution, cropped or covered sections may produce an incomplete or incorrect timetable. Include the full timetable, with all days, subjects and times visible. Always check the result before saving.",
         ),
+        // The image leaves South Africa for OpenAI, and a photographed timetable
+        // can carry learners' names. Say so before the upload, not after.
+        E(
+          "p",
+          { class: "timetable-photo-warning" },
+          "This photo is sent to OpenAI, outside South Africa, to be read. Crop out learners’ names and anything else personal first. If you’d rather it never left the country, enter the timetable manually below.",
+        ),
         E(
           "p",
           {},

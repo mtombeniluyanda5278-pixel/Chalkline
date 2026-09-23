@@ -25,6 +25,7 @@ function validRegistration(overrides: Record<string, unknown> = {}) {
     lastName: "Test",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
     email: `webauthn-${id}@example.com`,
     username: `webauthn.${id.slice(0, 6)}`,
     phone: "+27821234567",

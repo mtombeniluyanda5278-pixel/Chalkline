@@ -228,6 +228,7 @@ test("retired password routes cannot authenticate, reset, or create a password",
       email: "new@example.com",
       username: "new.user",
       dateOfBirth: "2000-01-01",
+      acceptTerms: true,
       password: "previous password",
       confirmPassword: "previous password",
     });

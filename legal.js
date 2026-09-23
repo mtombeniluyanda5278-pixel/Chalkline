@@ -29,7 +29,7 @@ const PRIVACY = [
     body: [
       "When you create an account we ask for your first and last name, email address, a username and your date of birth. These are required: without them we cannot create an account, verify that you are old enough to use the service, or send you a sign-in code.",
       "Your country, phone number and address are optional. Leaving them out changes nothing about how the service works.",
-      "You must be at least 13 years old. We use your date of birth only to check that, and to wish you well on your birthday if you have that turned on.",
+      "You must be at least 18. POPIA treats anyone younger as a child, whose information may only be used with a parent's or guardian's consent, and this service has no way to obtain that. We use your date of birth only to check your age, and to wish you well on your birthday if you have that turned on.",
     ],
     list: [
       "Identity: name, username, email address, date of birth",
@@ -45,7 +45,19 @@ const PRIVACY = [
     body: [
       "Your identity details exist so that you can sign in without a password and so that we can prove an account belongs to you before letting anyone back into it. Your work and files exist because storing and returning them is the service.",
       "The technical records exist to keep your account safe. When a new browser signs in, we record it and tell you, so that you can revoke it if it was not you. Rate limiting uses your IP address to stop bulk guessing. We do not use any of this to profile you or to advertise to you.",
-      "We send marketing email only if you asked for it during sign-up, and you can withdraw that at any time in your account settings without affecting anything else.",
+      "We send marketing email only if you asked for it. You can withdraw that at any time on your Preferences page, and doing so affects nothing else.",
+    ],
+  },
+  {
+    heading: "The legal basis for each use",
+    body: [
+      "POPIA only allows personal information to be processed with a justification. Ours are:",
+    ],
+    list: [
+      "Your account, your work and your files: needed to provide the service you signed up for",
+      "Security records, device trust and rate limiting: our legitimate interest, and yours, in keeping accounts safe",
+      "Marketing email: your consent, which you can withdraw at any time",
+      "Your date of birth: needed to confirm you are old enough to agree to these terms",
     ],
   },
   {
@@ -56,7 +68,7 @@ const PRIVACY = [
     list: [
       "Oracle Cloud, in Johannesburg, hosts the service and stores the database and your uploaded files",
       "Brevo, in the European Union, delivers your sign-in codes and account emails, and therefore receives your email address",
-      "Cloudflare answers the domain and runs the human-verification check shown when you register",
+      "Cloudflare answers the domain, runs the human-verification check shown when you register, and forwards mail sent to our privacy address",
       "Google, only if you choose to sign in with Google, confirms your email address to us",
       "OpenAI, only if you upload a photograph of a timetable, reads that image so that we can turn it into a timetable for you",
     ],
@@ -65,7 +77,7 @@ const PRIVACY = [
     heading: "Information that leaves South Africa",
     body: [
       "The service itself runs in Johannesburg, so your account and your work are stored in South Africa.",
-      "Three things cross the border. Your email address reaches Brevo in the European Union whenever we send you a message. Signing in with Google involves Google. Uploading a timetable photograph sends that image to OpenAI, and nothing else is sent with it.",
+      "Three things cross the border. Your email address reaches Brevo in the European Union whenever we send you a message. Signing in with Google involves Google. Uploading a timetable photograph sends that image to OpenAI in the United States. Nothing else is sent with it, but the picture itself may show names, so crop out learners\u2019 names and anything else personal before uploading.",
       "POPIA allows these transfers where the recipient is bound by agreements offering comparable protection, which is the basis we rely on. If you would rather no timetable image ever left the country, do not use the photograph import; you can enter a timetable by hand instead.",
     ],
   },
@@ -88,6 +100,7 @@ const PRIVACY = [
     body: [
       "You can delete your account from your account settings. That removes your profile, your lesson plans, notes, templates, timetables, uploaded files, trusted devices, recovery codes and security history.",
       "Your files are removed from storage shortly afterwards rather than instantly, because deletion is queued and retried until the storage provider confirms it. All versions of a file are removed, not only the most recent one.",
+      "If you ever used an administrative feature, the record of those actions is kept for accountability but no longer linked to you.",
       "Deletion cannot be undone, and we cannot recover work afterwards.",
     ],
   },
@@ -126,7 +139,7 @@ const TERMS = [
   {
     heading: "Your account",
     body: [
-      "You must be at least 13 years old, and the details you give us when registering must be true.",
+      "You must be at least 18 years old, and the details you give us when registering must be true.",
       "Your account is yours alone. Anyone who can read your email can request a sign-in code, so protect that mailbox as carefully as you would a password.",
       "Tell us promptly if you believe someone else has reached your account. Your account settings list every browser currently trusted, and you can revoke any of them yourself.",
     ],
@@ -180,7 +193,7 @@ const TERMS = [
   {
     heading: "Governing law",
     body: [
-      "These terms are governed by the law of the Republic of South Africa, and disputes fall to South African courts.",
+      "These terms are governed by the law of the Republic of South Africa. Disputes fall to the Western Cape High Court in Cape Town, without affecting any right you have under the Consumer Protection Act to approach a consumer court, ombud or the National Consumer Commission instead.",
       `Last updated ${LAST_UPDATED}. We will tell you before a material change takes effect.`,
     ],
   },

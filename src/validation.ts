@@ -83,6 +83,11 @@ export const RegisterInput = z
     trustDevice: z.boolean().default(false),
     marketingAnnouncements: z.boolean().default(false),
     marketingApps: z.boolean().default(false),
+    // Recorded as consents_at. Required server-side because a browser checkbox
+    // alone could be skipped, and the notice must precede collection.
+    acceptTerms: z.literal(true, {
+      error: "Accept the Terms and Privacy notice to create an account.",
+    }),
   })
   .superRefine((data, ctx) => {
     if (RESERVED_USERNAMES.has(data.username)) {

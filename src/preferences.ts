@@ -55,7 +55,7 @@ export async function registerPreferenceRoutes(app: FastifyInstance) {
     if (!user) return;
     const row = (
       await pool.query(
-        "SELECT session_days,timezone,personal_touches,educator_profile,onboarding_completed_at,date_of_birth,role FROM users WHERE id=$1",
+        "SELECT session_days,timezone,personal_touches,educator_profile,onboarding_completed_at,date_of_birth,role,marketing_announcements,marketing_apps FROM users WHERE id=$1",
         [user.id],
       )
     ).rows[0];
@@ -82,6 +82,8 @@ export async function registerPreferenceRoutes(app: FastifyInstance) {
       sessionDays: row.session_days,
       timezone: row.timezone,
       personalTouches: row.personal_touches,
+      marketingAnnouncements: row.marketing_announcements,
+      marketingApps: row.marketing_apps,
       profile: row.educator_profile,
       onboarded: Boolean(row.onboarding_completed_at),
       role: row.role,
@@ -105,18 +107,23 @@ export async function registerPreferenceRoutes(app: FastifyInstance) {
           .optional(),
         timezone: timezone.optional(),
         personalTouches: z.boolean().optional(),
+        // POPIA section 69: marketing consent must stay withdrawable.
+        marketingAnnouncements: z.boolean().optional(),
+        marketingApps: z.boolean().optional(),
         profile: profile.optional(),
       }),
       req.body,
     );
     await pool.query(
-      "UPDATE users SET session_days=coalesce($2,session_days),timezone=coalesce($3,timezone),personal_touches=coalesce($4,personal_touches),educator_profile=coalesce($5,educator_profile),onboarding_completed_at=CASE WHEN $5::jsonb IS NOT NULL THEN now() ELSE onboarding_completed_at END WHERE id=$1",
+      "UPDATE users SET session_days=coalesce($2,session_days),timezone=coalesce($3,timezone),personal_touches=coalesce($4,personal_touches),educator_profile=coalesce($5,educator_profile),onboarding_completed_at=CASE WHEN $5::jsonb IS NOT NULL THEN now() ELSE onboarding_completed_at END,marketing_announcements=coalesce($6,marketing_announcements),marketing_apps=coalesce($7,marketing_apps) WHERE id=$1",
       [
         user.id,
         b.sessionDays ?? null,
         b.timezone ?? null,
         b.personalTouches ?? null,
         b.profile ?? null,
+        b.marketingAnnouncements ?? null,
+        b.marketingApps ?? null,
       ],
     );
     return { ok: true };

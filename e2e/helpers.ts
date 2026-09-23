@@ -60,6 +60,7 @@ export function newAccount() {
     lastName: "Teacher",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
   };
 }
 

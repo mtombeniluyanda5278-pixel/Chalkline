@@ -89,6 +89,7 @@ async function account(verified = false) {
     lastName: "Test",
     country: "ZA",
     dateOfBirth: "2000-01-01",
+    acceptTerms: true,
     email,
     username: "t." + suffix,
     phone: "+27821234567",
