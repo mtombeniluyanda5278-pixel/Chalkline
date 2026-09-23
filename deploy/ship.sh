@@ -45,7 +45,7 @@ echo "==> Writing the environment"
 $SSH "$REMOTE" "cd /home/ubuntu/lessonbench/deploy && [ -f .env ] || ./generate-env.sh lessonbench.co.za ${ACME_EMAIL:-chixauth@gmail.com}"
 
 # Credentials live only on this machine and are injected over the SSH channel.
-for file in "$ROOT/.local/cloudflare.env" "$ROOT/.local/brevo.env"; do
+for file in "$ROOT/.local/cloudflare.env" "$ROOT/.local/brevo.env" "$ROOT/.local/google.env"; do
   [ -f "$file" ] || { echo "Missing $file" >&2; exit 1; }
   grep -E '^[A-Z_]+=' "$file" | while IFS='=' read -r key value; do
     $SSH "$REMOTE" "cd /home/ubuntu/lessonbench/deploy && \
