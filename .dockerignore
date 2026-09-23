@@ -1,0 +1,39 @@
+# Everything the image must never contain, or does not need.
+.git
+.github
+node_modules
+dist
+public-build
+coverage
+test-results
+playwright-report
+blob-report
+.playwright
+
+# Secrets and generated local credentials.
+.env
+.env.*
+!.env.example
+.local
+.vercel
+mail
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local-only tooling and scratch output.
+.venv
+.venv-*
+security-audit-chix-11
+wapiti-report
+postgres
+docker-compose.yml
+*.zip
+.DS_Store
+
+# Tests and E2E are not part of the runtime image.
+e2e
+tests
+playwright.config.ts
+tsconfig.test.json

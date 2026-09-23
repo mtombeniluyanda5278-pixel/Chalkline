@@ -1,0 +1,37 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# WEBAUTHN_ORIGIN is an exact string match, so passkeys only work on one
+# hostname. www is redirected rather than served.
+www.{$APP_DOMAIN} {
+	redir https://{$APP_DOMAIN}{uri} permanent
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		-Server
+	}
+
+	# Upload bodies are bounded but buffered in memory by the backend, so the
+	# edge refuses anything well past UPLOAD_MAX_BYTES before Node allocates it.
+	request_body {
+		max_size 32MB
+	}
+
+	reverse_proxy app:3000
+}
+
+# S3 endpoint for the app only. It is public because production config requires
+# an HTTPS storage endpoint; the bucket itself is private and every object is
+# served through authenticated backend routes, never from here directly.
+{$FILES_DOMAIN} {
+	request_body {
+		max_size 32MB
+	}
+
+	reverse_proxy minio:9000
+}

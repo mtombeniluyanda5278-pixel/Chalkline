@@ -1,0 +1,171 @@
+# Single-VPS production stack for LessonBench.
+#
+# Everything the app needs runs on this one host: Caddy terminates TLS and is
+# the only container with published ports, so Postgres, Redis, ClamAV and MinIO
+# are reachable only from inside this network.
+#
+#   docker compose --profile bootstrap run --rm bootstrap   # once, and after each release
+#   docker compose up -d
+name: lessonbench
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # Caddy obtains and renews Let's Encrypt certificates automatically, which is
+  # why ports 80 and 443 must both be open: 80 is the ACME challenge.
+  caddy:
+    <<: *restart
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+      FILES_DOMAIN: ${FILES_DOMAIN:?set FILES_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      default:
+        # Pinned so TRUST_PROXY can name this proxy alone rather than the whole
+        # subnet, and aliased so the app resolves the storage hostname inside
+        # the network instead of leaving the box and coming back.
+        ipv4_address: 172.28.0.10
+        aliases:
+          - ${FILES_DOMAIN}
+
+  app:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    expose:
+      - "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # One-off operator task. Creates roles and the database on first run, then
+  # applies migrations, runtime grants, RLS policies, quotas and the bucket.
+  # It carries MIGRATION_DATABASE_URL; the app deliberately never does.
+  bootstrap:
+    profiles:
+      - bootstrap
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: tools
+    env_file:
+      - .env
+      - .env.bootstrap
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    volumes:
+      - ./bootstrap.sh:/bootstrap.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      # STORAGE_ENDPOINT must be HTTPS in production, so the bucket is created
+      # through Caddy. Caddy needs DNS pointing here to hold a certificate.
+      caddy:
+        condition: service_started
+
+  postgres:
+    <<: *restart
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chix_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chix_admin -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command:
+      [
+        "sh",
+        "-c",
+        'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"',
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Uploads are rejected outright unless a scanner is reachable, so this is not
+  # optional. It also wants roughly 2 GB of RAM to itself for the signature set.
+  clamav:
+    <<: *restart
+    image: clamav/clamav:1.4
+    environment:
+      CLAMAV_NO_MILTERD: "true"
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      # The first start downloads the virus database before it answers.
+      retries: 20
+      start_period: 300s
+
+  minio:
+    <<: *restart
+    image: quay.io/minio/minio:latest
+    entrypoint:
+      ["sh", "-c", 'exec minio server /data --console-address ":9001"']
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:?set STORAGE_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:?set STORAGE_SECRET_ACCESS_KEY}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  postgres_data:
+  redis_data:
+  clamav_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
