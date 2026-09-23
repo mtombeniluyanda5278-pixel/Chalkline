@@ -7,9 +7,7 @@ let cached: Record<string, string> | undefined;
 
 async function env(): Promise<Record<string, string>> {
   if (cached) return cached;
-  const { localEnvironment } = await import(
-    "../scripts/local-environment.mjs"
-  );
+  const { localEnvironment } = await import("../scripts/local-environment.mjs");
   cached = (await localEnvironment()) as Record<string, string>;
   Object.assign(process.env, cached);
   return cached;
@@ -75,13 +73,17 @@ export async function registerVerified(
     data: { ...account, trustDevice: true },
   });
   if (registered.status() !== 201)
-    throw new Error(`register failed: ${registered.status()} ${await registered.text()}`);
+    throw new Error(
+      `register failed: ${registered.status()} ${await registered.text()}`,
+    );
 
   const verified = await request.post("/v1/auth/verify-email", {
     data: { email: account.email, code: await verificationCode(account.email) },
   });
   if (verified.status() !== 200)
-    throw new Error(`verify failed: ${verified.status()} ${await verified.text()}`);
+    throw new Error(
+      `verify failed: ${verified.status()} ${await verified.text()}`,
+    );
 
   await withClient((c) =>
     c.query("UPDATE users SET email_verified_at = now() WHERE email = $1", [

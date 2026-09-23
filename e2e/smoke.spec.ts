@@ -26,8 +26,10 @@ test.describe("public pages", () => {
     expect(outline).toBe("none");
   });
 
+  // Hash routes are how the app links internally, and the only form that works
+  // on static hosting as well as the dev server.
   test("sign-in offers every passwordless method", async ({ page }) => {
-    await page.goto("/login");
+    await page.goto("/#/login");
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
     await expect(
       page.getByRole("button", { name: /Email me a sign-in code/i }),
@@ -35,9 +37,7 @@ test.describe("public pages", () => {
     await expect(
       page.getByRole("button", { name: /authenticator app/i }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: /passkey/i }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /passkey/i })).toBeVisible();
   });
 
   test("health endpoint responds", async ({ request }) => {

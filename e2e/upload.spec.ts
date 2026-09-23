@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { newAccount, registerVerified, deleteAccount, signInCode } from "./helpers";
+import {
+  newAccount,
+  registerVerified,
+  deleteAccount,
+  signInCode,
+} from "./helpers";
 
 // The flows that were broken in production and had no browser-level coverage.
 test.describe("authenticated flows", () => {
@@ -72,7 +77,7 @@ test.describe("authenticated flows", () => {
     // fixture is a separate context and would leave the browser signed out.
     await registerVerified(page.request, account);
 
-    await page.goto("/dashboard");
+    await page.goto("/#/dashboard");
     const nav = page.getByRole("navigation");
     await expect(nav.getByRole("link", { name: "Lesson plans" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Files" })).toBeVisible();
