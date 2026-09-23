@@ -12,16 +12,19 @@ export const LAST_UPDATED = "23 September 2026";
 // Filled in before launch; POPIA section 18 requires the responsible party to
 // be identifiable, so these are not optional.
 const OPERATOR = {
-  name: "LessonBench",
+  service: "LessonBench",
+  name: "Luyanda Mtombeni",
   contact: "privacy@lessonbench.co.za",
+  // Still required by POPIA section 18: a postal address, not a home one.
+  address: "",
 };
 
 const PRIVACY = [
   {
     heading: "Who is responsible for your information",
     body: [
-      `${OPERATOR.name} operates this service and decides how your personal information is used. In the Protection of Personal Information Act (POPIA) that makes us the responsible party.`,
-      `You can reach us about anything on this page at ${OPERATOR.contact}.`,
+      `${OPERATOR.service} is operated by ${OPERATOR.name}, in Cape Town, who decides how your personal information is used. In the Protection of Personal Information Act (POPIA) that makes ${OPERATOR.name} the responsible party, and also its Information Officer.`,
+      `You can reach us about anything on this page at ${OPERATOR.contact}${OPERATOR.address ? `, or in writing at ${OPERATOR.address}` : ""}.`,
     ],
   },
   {
@@ -132,7 +135,7 @@ const TERMS = [
   {
     heading: "What this is",
     body: [
-      "LessonBench is a tool for planning lessons. You keep your work here, and we keep it available to you.",
+      `${OPERATOR.service} is a tool for planning lessons, operated by ${OPERATOR.name} in Cape Town. You keep your work here, and we keep it available to you.`,
       "Using the service means accepting what follows. If you do not accept it, do not use the service.",
     ],
   },
