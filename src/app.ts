@@ -18,6 +18,17 @@ import { registerAuthRoutes } from "./auth.js";
 import { registerWebAuthnRoutes } from "./webauthn.js";
 import { clientIp, consumeRateLimit, redis } from "./rateLimit.js";
 
+// When Node serves the frontend itself there is no static host supplying a
+// CSP, so the CAPTCHA provider's own origins have to be allowed here or the
+// widget extras.js injects is blocked and registration can never complete.
+// Only the configured provider is permitted.
+const captchaOrigins =
+  config.BOT_PROTECTION_PROVIDER === "turnstile"
+    ? ["https://challenges.cloudflare.com"]
+    : config.BOT_PROTECTION_PROVIDER === "hcaptcha"
+      ? ["https://js.hcaptcha.com", "https://*.hcaptcha.com"]
+      : [];
+
 export async function buildApp() {
   const app = Fastify({
     trustProxy: config.TRUST_PROXY,
@@ -37,12 +48,25 @@ export async function buildApp() {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "blob:", "https://i.ytimg.com"],
+        scriptSrc: ["'self'", ...captchaOrigins],
+        connectSrc: ["'self'", ...captchaOrigins],
+        styleSrc: ["'self'", ...captchaOrigins],
+        frameSrc: captchaOrigins.length ? captchaOrigins : ["'none'"],
+        imgSrc: [
+          "'self'",
+          "data:",
+          "blob:",
+          "https://i.ytimg.com",
+          ...captchaOrigins,
+        ],
         frameAncestors: ["'none'"],
         upgradeInsecureRequests: config.NODE_ENV === "production" ? [] : null,
       },
     },
     hsts: config.NODE_ENV === "production",
+    // frame-ancestors is authoritative, but the documented header set denies
+    // framing outright for anything still reading X-Frame-Options.
+    frameguard: { action: "deny" },
   });
 
   app.addHook("onRequest", async (req, reply) => {
