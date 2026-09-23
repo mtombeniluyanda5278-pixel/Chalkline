@@ -58,6 +58,30 @@ test.describe("public pages", () => {
     await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();
   });
 
+  // Google will not let the OAuth app be published without a reachable privacy
+  // policy, and POPIA requires the notice regardless.
+  test("privacy and terms are reachable and linked from every page", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByRole("link", { name: "Privacy" }).click();
+    await expect(page.getByRole("heading", { name: "Privacy" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /Who is responsible/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Information Regulator/i).first(),
+    ).toBeVisible();
+
+    await page.goto("/#/terms");
+    await expect(
+      page.getByRole("heading", { name: "Terms of use" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /Governing law/i }),
+    ).toBeVisible();
+  });
+
   test("health endpoint responds", async ({ request }) => {
     const r = await request.get("/health");
     expect(r.status()).toBe(200);

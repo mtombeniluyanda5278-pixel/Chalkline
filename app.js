@@ -1,4 +1,5 @@
 import { authenticatorCard } from "./authenticator-ui.js";
+import { setupLegal, renderPrivacy, renderTerms } from "./legal.js";
 import { createLoader } from "./loading.js";
 import { renderLessons, renderTimetables } from "./lessons.js";
 import {
@@ -1032,6 +1033,8 @@ const ROUTES = {
   "/change-email": { render: renderRecoveryLink },
   "/discover-account": { render: renderRecoveryLink },
   "/account": { authOnly: true, render: renderAccount },
+  "/privacy": { render: renderPrivacy },
+  "/terms": { render: renderTerms },
 };
 
 function parseHash() {
@@ -1152,6 +1155,7 @@ async function renderRouteNow() {
 
 window.addEventListener("hashchange", renderRoute);
 
+setupLegal({ el, viewRoot });
 setupExtras({
   el,
   apiFetch,

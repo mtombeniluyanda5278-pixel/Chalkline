@@ -12,6 +12,7 @@ const assets = [
   "loading.js",
   "authenticator-ui.js",
   "extras.js",
+  "legal.js",
   "autosave.js",
   "readers.js",
   "resource-preview.js",
@@ -53,6 +54,8 @@ export async function registerFrontend(app: FastifyInstance) {
     "schedule",
     "account",
     "devices",
+    "privacy",
+    "terms",
   ]) {
     app.get("/" + path, (req, reply) => reply.redirect("/#" + req.url));
   }

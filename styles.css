@@ -2983,3 +2983,54 @@ select:focus-visible {
   overflow-wrap: anywhere;
   font: inherit;
 }
+
+/* Privacy and terms. Long-form reading rather than app chrome, so the measure
+   is narrower than the workspace and the rhythm looser. */
+.legal-shell {
+  max-width: 46rem;
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.legal-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.legal-section h2 {
+  font-size: var(--text-lg);
+  margin: 0;
+}
+
+.legal-section p {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.legal-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+  line-height: 1.6;
+}
+
+.site-footer {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.site-footer a {
+  color: var(--color-ink-muted);
+  text-decoration: none;
+}
+
+.site-footer a:hover,
+.site-footer a:focus-visible {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
