@@ -126,9 +126,10 @@ services:
   # optional. It also wants roughly 2 GB of RAM to itself for the signature set.
   clamav:
     <<: *restart
-    image: clamav/clamav:1.4
-    environment:
-      CLAMAV_NO_MILTERD: "true"
+    # Built here, not pulled: clamav/clamav publishes amd64 only and this
+    # deploys to ARM. See deploy/clamav/Dockerfile.
+    build:
+      context: ./clamav
     volumes:
       - clamav_data:/var/lib/clamav
     healthcheck:
