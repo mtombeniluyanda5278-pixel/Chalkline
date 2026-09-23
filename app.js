@@ -1268,7 +1268,21 @@ async function renderLogin() {
   const errorBanner = el("div", { class: "form-error" });
   errorBanner.hidden = true;
 
-  const trust = el("input", { type: "checkbox" });
+  // Every method honours this, so it sits above them. It was created but never
+  // placed on the page, which meant no browser was ever remembered.
+  const trust = el("input", { type: "checkbox", id: "login-trust-device" });
+  trust.checked = Boolean(state.trustDevice);
+  trust.addEventListener("change", () => {
+    state.trustDevice = trust.checked;
+  });
+  const trustRow = el("div", { class: "field checkbox-field" }, [
+    trust,
+    el(
+      "label",
+      { for: "login-trust-device" },
+      "Remember this browser for 90 days",
+    ),
+  ]);
   const continueBtn = el(
     "button",
     { type: "button", class: "btn btn--ghost btn--full" },
@@ -1388,6 +1402,7 @@ async function renderLogin() {
         body: {
           email: fields.email.input.value.trim(),
           code: fields.code.input.value.trim(),
+          trustDevice: trust.checked,
         },
       });
       if (loginResult.approvalRequired) {
@@ -1472,6 +1487,7 @@ async function renderLogin() {
     [
       methodSummary,
       changeEmailBtn,
+      trustRow,
       codeBtn,
       continueBtn,
       googleBtn,
@@ -1795,6 +1811,9 @@ async function renderVerifyEmail() {
           body: {
             email: emailField.input.value.trim(),
             code: codeField.input.value.trim(),
+            ...(passwordless
+              ? { trustDevice: Boolean(state.trustDevice) }
+              : {}),
           },
         },
       );

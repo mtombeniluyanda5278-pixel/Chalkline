@@ -29,7 +29,15 @@ export async function registerFrontend(app: FastifyInstance) {
       : file.endsWith(".css")
         ? "text/css; charset=utf-8"
         : "text/javascript; charset=utf-8";
-    return reply.type(type).send(await readFile(new URL(file, root)));
+    // In production the modules are bundled into app.js, so most names on the
+    // allowlist have no file. That is a missing page, not a server fault.
+    try {
+      return reply.type(type).send(await readFile(new URL(file, root)));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return reply.code(404).send({ error: "Not found." });
+      throw error;
+    }
   };
   app.get("/", (_req, reply) => serve("index.html", reply));
   for (const asset of assets)

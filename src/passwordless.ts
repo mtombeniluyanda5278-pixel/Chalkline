@@ -187,7 +187,6 @@ export async function registerPasswordlessRoutes(app: FastifyInstance) {
     const account = (
       await pool.query(
         `SELECT u.role,
-                EXISTS(SELECT 1 FROM authenticators a WHERE a.user_id=u.id) AS authenticator,
                 EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id=u.id) AS passkey
            FROM users u WHERE u.email=$1`,
         [body.email],
@@ -198,7 +197,10 @@ export async function registerPasswordlessRoutes(app: FastifyInstance) {
     return {
       emailOtp: true,
       google: googleEnabled(),
-      authenticator: Boolean(account?.authenticator),
+      // Offered to everyone. Only a real account can have an authenticator, so
+      // offering it selectively would confirm the account exists; for an
+      // account without one, the code is simply refused like a wrong code.
+      authenticator: true,
       // Passkeys stay with the administrator: every other sign-in method
       // already establishes trust on a new browser, so this costs teachers
       // nothing and spares them a prompt most of their devices cannot satisfy.

@@ -18,6 +18,18 @@ SSH="ssh -i $KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15"
 
 [ -f "$KEY" ] || { echo "Missing $KEY" >&2; exit 1; }
 
+# Caddy requests certificates as soon as it starts, and the storage bucket is
+# created through the files hostname. If either name points elsewhere, the
+# deploy fails later in a way that looks like a certificate problem.
+echo "==> Checking DNS points here"
+for name in lessonbench.co.za files.lessonbench.co.za; do
+  resolved="$(dig +short "$name" @1.1.1.1 | tail -1)"
+  if [ "$resolved" != "$IP" ]; then
+    echo "$name resolves to '${resolved:-nothing}', not $IP. Update DNS first." >&2
+    exit 1
+  fi
+done
+
 echo "==> Waiting for SSH on $IP"
 n=0
 until $SSH "$REMOTE" true 2>/dev/null; do
@@ -34,6 +46,8 @@ rsync -az --delete -e "$SSH" \
   --exclude ".env.*" --exclude "mail" --exclude "coverage" \
   --exclude "test-results" --exclude "playwright-report" \
   --exclude "*.zip" --exclude ".venv-*" --exclude "security-audit-chix-11" \
+  --exclude "wapiti-report" --exclude ".claude" --exclude ".vercel" \
+  --exclude "CNAME" --exclude "chix-*.md" --exclude "postgres" \
   "$ROOT/" "$REMOTE:/home/ubuntu/lessonbench/"
 
 echo "==> Preparing the host"

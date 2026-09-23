@@ -50,9 +50,12 @@ test.describe("public pages", () => {
       page.getByRole("button", { name: /Email me a sign-in code/i }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /passkey/i })).toBeHidden();
+    // Offered to everyone, so that offering it cannot confirm an account.
     await expect(
       page.getByRole("button", { name: /authenticator app/i }),
-    ).toBeHidden();
+    ).toBeVisible();
+    // Was created but never placed on the page, so no browser was remembered.
+    await expect(page.getByLabel(/Remember this browser/i)).toBeVisible();
 
     await page.getByRole("button", { name: "Change email" }).click();
     await expect(page.getByRole("button", { name: "Continue" })).toBeVisible();

@@ -480,17 +480,16 @@ test("per-account sign-in methods do not reveal whether an account exists", asyn
   );
   assert.equal(ordinary.json().emailOtp, true);
   assert.equal(ordinary.json().passkey, false);
-  assert.equal(ordinary.json().authenticator, false);
 
-  // An enrolled authenticator is offered, because the account chose it.
+  // Enrolling an authenticator must not change the answer, or the answer
+  // would confirm the account exists.
   await pool.query(
     "INSERT INTO authenticators(user_id,encrypted_secret,last_step) SELECT id,'x',0 FROM users WHERE email=$1",
     [body.email],
   );
-  assert.equal(
-    (await post("/v1/auth/methods", { email: body.email })).json()
-      .authenticator,
-    true,
+  assert.deepEqual(
+    (await post("/v1/auth/methods", { email: body.email })).json(),
+    unknown.json(),
   );
 
   // A passkey is offered only to an administrator, never to a teacher who

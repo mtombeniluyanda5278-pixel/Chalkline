@@ -19,11 +19,15 @@ const defaults = {
   authenticatorSetup: { max: 5, windowMs: 15 * 60 * 1000 },
   authenticatorVerify: { max: 5, windowMs: 5 * 60 * 1000 },
   authenticatorLoginIp: { max: 30, windowMs: 15 * 60 * 1000 },
-  login: { max: 30, windowMs: 15 * 60 * 1000 },
+  login: { max: 60, windowMs: 15 * 60 * 1000 },
   // Answering which methods an address can use is cheap and a school shares one
   // address, so this is generous; it exists to blunt bulk enumeration attempts.
   signInMethods: { max: 60, windowMs: 15 * 60 * 1000 },
-  signup: { max: 5, windowMs: 60 * 60 * 1000 },
+  // Schools share one public IP, so per-IP limits must allow a staff room,
+  // not a person. Sign-ups and logins each send an email, though, and the
+  // email plan allows 300 a day for the whole site: these two stay low enough
+  // that one address cannot exhaust it. Raise them together with that plan.
+  signup: { max: 50, windowMs: 60 * 60 * 1000 },
   passwordReset: { max: 3, windowMs: 60 * 60 * 1000 },
   verifyEmailAttempt: { max: 10, windowMs: 15 * 60 * 1000 },
   passwordResetIp: { max: 10, windowMs: 60 * 60 * 1000 },
@@ -48,7 +52,9 @@ const defaults = {
   search: { max: 60, windowMs: 60 * 1000 },
   feedback: { max: 5, windowMs: 60 * 60 * 1000 },
   recoveryIp: { max: 10, windowMs: 60 * 60 * 1000 },
-  global: { max: 120, windowMs: 60 * 1000 },
+  // Sends no email, so it only needs to stop floods. A school of teachers
+  // autosaving at once is one IP address.
+  global: { max: 1200, windowMs: 60 * 1000 },
 } as const satisfies Record<string, Bucket>;
 
 export const buckets: {
